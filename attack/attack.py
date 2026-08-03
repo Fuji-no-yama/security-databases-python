@@ -63,7 +63,7 @@ class Attack:
         self.release = resolved_version
         self.version = f"v{resolved_version}"  # ディレクトリ名はv17.1のような形式であるため、バージョンをv{version}の形式に変換
         self.data_dir_path = files("attack.data").joinpath(data_path)  # パッケージ内のdataディレクトリ
-        self.user_data_dir_path: Path = Path(user_data_dir("attack")) / self.version  # ユーザ側dataディレクトリ
+        self.user_data_dir_path: Path = Path(user_data_dir("attack")) / "releases" / resolved_version / domain
         self.user_data_dir_path.mkdir(parents=True, exist_ok=True)  # 念の為作成
         self.external_reference_list: list[AttackExternalReference] = self.__setup_external_reference_list()
         self.tactic_list: list[AttackTactic] = self.__setup_tactic_list()
