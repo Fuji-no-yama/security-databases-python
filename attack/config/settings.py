@@ -1,32 +1,5 @@
-from dotenv import load_dotenv
-from pydantic import Field
-from pydantic_settings import (
-    BaseSettings,
-    PydanticBaseSettingsSource,
-    SettingsConfigDict,
-)
+"""共通Settingsの互換import。"""
 
+from _security_databases.settings import Settings, settings
 
-class Settings(BaseSettings):
-    """
-    全体設定
-    """
-
-    model_config = SettingsConfigDict(env_file=".env.dev", env_file_encoding="utf-8")
-    openai_api_key: str = Field("", alias="OPENAI_API_KEY")
-
-    # .env > init kwargs > OS env の優先順位を維持
-    @classmethod
-    def settings_customise_sources(
-        cls,
-        settings_cls: type[BaseSettings],  # noqa: ARG003
-        init_settings: PydanticBaseSettingsSource,
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,
-        file_secret_settings: PydanticBaseSettingsSource,
-    ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return dotenv_settings, init_settings, env_settings, file_secret_settings
-
-
-load_dotenv(override=True)
-settings = Settings()
+__all__ = ["Settings", "settings"]

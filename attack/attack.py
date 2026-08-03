@@ -1,4 +1,3 @@
-import os
 import re
 import shutil
 from contextlib import suppress
@@ -10,12 +9,16 @@ import chromadb
 import pandas as pd
 from chromadb.api.models.Collection import Collection
 from chromadb.errors import NotFoundError
-from chromadb.utils import embedding_functions
 from platformdirs import user_data_dir
 from tqdm import tqdm
 
+from _security_databases.embedding import (
+    EmbeddingModel,
+    EmbeddingProvider,
+    create_embedding_function,
+    resolve_embedding_configuration,
+)
 from attack import version_resolver
-from attack.config import settings
 from attack.entities import (
     AttackAbstractMitigation,
     AttackCampaign,
@@ -42,14 +45,16 @@ class Attack:
         *,  # 以下をキーワード引数に
         domain: str = "enterprise",
         version: str | None = None,
-        emb_model: Literal["text-embedding-3-small", "text-embedding-3-large"] = "text-embedding-3-large",
+        emb_model: EmbeddingModel = "text-embedding-3-large",
+        embedding_provider: EmbeddingProvider = "openai",
         initialize_vector: bool = False,
     ) -> None:
         """
         Args:
             domain (str): ATT&CKドメイン ("enterprise", "mobile", "ics"のいずれか) defaultはenterprise
             version (str | None): ATTACKデータバージョン。Noneの場合はmanifest.yamlのlatest
-            emb_model (str): ベクトル化に使用するモデル
+            emb_model (str): OpenAI providerでベクトル化に使用するモデル。Azure OpenAIではdeployment設定を使用する
+            embedding_provider (str): "openai"または"azure_openai"
             initialize_vector (bool): ベクトルDBを初期化するかどうか(デフォルトはFalse。TrueにするとベクトルDBを再構築する)
         """  # noqa: E501
         available_domains: list[str] = version_resolver.list_domains()
@@ -73,16 +78,22 @@ class Attack:
         self.software_list: list[AttackSoftware] = self.__setup_software_list()
         self.technique_list: list[AttackTechnique] = self.__setup_technique_list()
 
-        if settings.openai_api_key:
-            if not os.path.isdir(str(self.user_data_dir_path.joinpath("chroma"))):  # ユーザ側のバージョンディレクトリにDBが存在しない場合
+        self.technique_chroma_collection: Collection | None = None
+        self.procedure_chroma_collection: Collection | None = None
+
+        embedding_configuration = resolve_embedding_configuration(embedding_provider, emb_model)
+        if embedding_configuration is not None:
+            self._embedding_function = create_embedding_function(embedding_configuration)
+            self.chroma_path = self.user_data_dir_path / "chroma" / embedding_configuration.cache_key
+            has_vector_db = self.chroma_path.is_dir()
+            if not has_vector_db:
                 print("ベクトルDBの設定がありません。初期化し作成します...")
-                initialize_vector = True  # 初期実行時なので初期化を行う
-            self.chroma_client = chromadb.PersistentClient(str(self.user_data_dir_path.joinpath("chroma")))
+                initialize_vector = True
+            self.chroma_client = chromadb.PersistentClient(str(self.chroma_path))
             if initialize_vector:
-                # 初期化が選択されている or 指定バージョンのvector DBが存在しない場合
-                self.__initialize_vector(model=emb_model)
-            self.technique_chroma_collection: Collection = self.__get_technique_chroma_collection(model=emb_model)
-            self.procedure_chroma_collection: Collection = self.__get_procedure_chroma_collection(model=emb_model)
+                self.__initialize_vector()
+            self.technique_chroma_collection = self.__get_technique_chroma_collection()
+            self.procedure_chroma_collection = self.__get_procedure_chroma_collection()
 
     def __setup_external_reference_list(self) -> list[AttackExternalReference]:
         mitigation_df: pd.DataFrame = pd.read_excel(
@@ -317,16 +328,16 @@ class Attack:
                 self.__add_technique_to_tactic(tactic.name, tec)
         return technique_list
 
-    def __initialize_vector(self, model: Literal["text-embedding-3-small", "text-embedding-3-large"]) -> None:
+    def __initialize_vector(self) -> None:
         try:
-            self.__initialize_technique_vector(model=model)  # テクニックのベクトルDBを初期化
-            self.__initialize_procedure_vector(model=model)  # プロシージャのベクトルDBを初期化
+            self.__initialize_technique_vector()
+            self.__initialize_procedure_vector()
             print("ベクトルDBの初期化が完了しました。")  # 初期化完了のメッセージ
         except Exception:
-            shutil.rmtree(str(self.user_data_dir_path.joinpath("chroma")))  # 初期化失敗時は変に残らないように削除
+            shutil.rmtree(self.chroma_path)
             raise
 
-    def __initialize_technique_vector(self, model: Literal["text-embedding-3-small", "text-embedding-3-large"]) -> None:
+    def __initialize_technique_vector(self) -> None:
         # ベクトルdb(chroma)とavroファイルの両方を初期化する関数
         # ベクトルavroファイルの初期化
         id_list: list[str] = []
@@ -339,14 +350,10 @@ class Attack:
         # ベクトルDB(chroma)の初期化
         with suppress(NotFoundError):
             self.chroma_client.delete_collection(name="attack_technique")  # 存在する場合は一度削除してリセット
-        openai_ef = embedding_functions.OpenAIEmbeddingFunction(  # ベクトル化関数
-            api_key=settings.openai_api_key,
-            model_name=model,
-        )
         collection: Collection = self.chroma_client.get_or_create_collection(
             name="attack_technique",
             metadata={"hnsw:space": "cosine"},
-            embedding_function=openai_ef,  # ty:ignore[invalid-argument-type]
+            embedding_function=self._embedding_function,  # ty:ignore[invalid-argument-type]
         )
         print("テクニックベクトルDB初期化中...")
         for i in tqdm(range(0, len(id_list), 200)):  # rate limitを避けるため200件ずつ追加
@@ -357,7 +364,7 @@ class Attack:
                 metadatas=metadata_list[i:end_idx],  # ty:ignore[invalid-argument-type]
             )
 
-    def __initialize_procedure_vector(self, model: Literal["text-embedding-3-small", "text-embedding-3-large"]) -> None:
+    def __initialize_procedure_vector(self) -> None:
         # procedureについてベクトルDB(chroma)とavroファイルの両方を初期化する関数
         id_list: list[str] = []
         desc_list: list[str] = []
@@ -380,14 +387,10 @@ class Attack:
         # ベクトルDB(chroma)の初期化
         with suppress(NotFoundError):
             self.chroma_client.delete_collection(name="attack_procedure")  # 存在する場合は一度削除してリセット
-        openai_ef = embedding_functions.OpenAIEmbeddingFunction(  # ベクトル化関数
-            api_key=settings.openai_api_key,
-            model_name=model,
-        )
         collection: Collection = self.chroma_client.get_or_create_collection(
             name="attack_procedure",
             metadata={"hnsw:space": "cosine"},
-            embedding_function=openai_ef,  # ty:ignore[invalid-argument-type]
+            embedding_function=self._embedding_function,  # ty:ignore[invalid-argument-type]
         )
         print("プロシージャベクトルDB初期化中...")
         for i in tqdm(range(0, len(id_list), 200)):  # rate limitを避けるため200件ずつ追加
@@ -398,26 +401,12 @@ class Attack:
                 metadatas=metadata_list[i:end_idx],  # ty:ignore[invalid-argument-type]
             )
 
-    def __get_technique_chroma_collection(
-        self,
-        model: Literal["text-embedding-3-small", "text-embedding-3-large"],
-    ) -> Collection:  # chromaDBを起動する関数
-        openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-            api_key=settings.openai_api_key,
-            model_name=model,
-        )
-        collection: Collection = self.chroma_client.get_collection(name="attack_technique", embedding_function=openai_ef)  # ty:ignore[invalid-argument-type]
+    def __get_technique_chroma_collection(self) -> Collection:  # chromaDBを起動する関数
+        collection: Collection = self.chroma_client.get_collection(name="attack_technique", embedding_function=self._embedding_function)  # ty:ignore[invalid-argument-type]
         return collection
 
-    def __get_procedure_chroma_collection(
-        self,
-        model: Literal["text-embedding-3-small", "text-embedding-3-large"],
-    ) -> Collection:  # chromaDBを起動する関数
-        openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-            api_key=settings.openai_api_key,
-            model_name=model,
-        )
-        collection: Collection = self.chroma_client.get_collection(name="attack_procedure", embedding_function=openai_ef)  # ty:ignore[invalid-argument-type]
+    def __get_procedure_chroma_collection(self) -> Collection:  # chromaDBを起動する関数
+        collection: Collection = self.chroma_client.get_collection(name="attack_procedure", embedding_function=self._embedding_function)  # ty:ignore[invalid-argument-type]
         return collection
 
     def __add_technique_to_tactic(
@@ -729,8 +718,8 @@ class Attack:
         Returns:
             list[AttackTechnique]: top_kで指定された個数分上位の結果をテクニックオブジェクト
         """
-        if not settings.openai_api_key:
-            err_msg = "OPENAI_API_KEYが設定されていないため、ベクトルDB検索は無効化されています。"
+        if self.technique_chroma_collection is None:
+            err_msg = "選択したEmbedding providerの設定がないため、ベクトルDB検索は無効化されています。"
             raise ValueError(err_msg)
         if filter == "parent":
             result = self.technique_chroma_collection.query(query_texts=[query], n_results=top_k, where={"is_parent": True})
@@ -758,8 +747,8 @@ class Attack:
         Returns:
             list[AttackProcedure]: top_kで指定された個数分上位の結果をプロシージャオブジェクト
         """
-        if not settings.openai_api_key:
-            err_msg = "OPENAI_API_KEYが設定されていないため、ベクトルDB検索は無効化されています。"
+        if self.procedure_chroma_collection is None:
+            err_msg = "選択したEmbedding providerの設定がないため、ベクトルDB検索は無効化されています。"
             raise ValueError(err_msg)
         result = self.procedure_chroma_collection.query(query_texts=[query], n_results=top_k, where={"parent": filter} if filter != "all" else None)
         ret: list[AttackProcedure] = [self.get_procedure_by_id(procedure_id=proc_id) for proc_id in result["ids"][0]]

@@ -43,6 +43,7 @@ source = "vcs"
 
 [tool.hatch.build]
 include = [
+  "/_security_databases",
   "/atlas",
   "/attack",
   "/README.md",
@@ -51,7 +52,7 @@ include = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["atlas", "attack"]
+packages = ["_security_databases", "atlas", "attack"]
 
 [tool.ruff]
 line-length = 150

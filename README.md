@@ -5,18 +5,18 @@ MITRE ATLAS と MITRE ATT&CK のデータを Python から扱うためのSDKで�
 ## 必要環境
 
 - Python 3.10以上
-- セマンティック検索を使う場合のみ `OPENAI_API_KEY`
+- セマンティック検索を使う場合のみOpenAIまたはAzure OpenAIの接続情報
 
 ## インストール
 
 リリース版をインストールする場合:
 
 ```bash
-pip install "security-databases-python @ git+https://github.com/Fuji-no-yama/security-databases-python@v1.0.1"
+pip install "security-databases-python @ git+https://github.com/Fuji-no-yama/security-databases-python@v1.1.0"
 ```
 
 ```bash
-uv add git+https://github.com/Fuji-no-yama/security-databases-python --tag v1.0.1
+uv add git+https://github.com/Fuji-no-yama/security-databases-python --tag v1.1.0
 ```
 
 開発版を利用する場合:
@@ -32,6 +32,75 @@ from atlas import Atlas
 from attack import Attack
 ```
 
+## Embedding provider
+
+セマンティック検索ではOpenAIとAzure OpenAIを選択できます。デフォルトは既存互換の `openai` です。providerはATLASとATT&CKの初期化引数 `embedding_provider` で明示し、認証情報は環境変数またはプロジェクトルートの `.env.dev` から読み込みます。
+
+### OpenAI
+
+```dotenv
+OPENAI_API_KEY=your-openai-api-key
+```
+
+```python
+from atlas import Atlas
+from attack import Attack
+
+atlas = Atlas(
+    embedding_provider="openai",
+    emb_model="text-embedding-3-small",
+)
+
+attack = Attack(
+    embedding_provider="openai",
+    emb_model="text-embedding-3-small",
+)
+```
+
+`embedding_provider`は省略できるため、従来の `Atlas()` と `Attack()` も `OPENAI_API_KEY` が設定されていればOpenAIを使用します。APIキーがない場合、通常のデータ取得は利用できますが、セマンティック検索は無効になります。
+
+### Azure OpenAI
+
+Azure OpenAIでは、Embeddingモデルをデプロイしたリソースの情報を設定します。
+
+```dotenv
+AZURE_OPENAI_API_KEY=your-azure-openai-api-key
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_API_VERSION=your-api-version
+AZURE_OPENAI_EMBEDDING_DEPLOYMENT=your-embedding-deployment
+```
+
+```python
+from atlas import Atlas
+from attack import Attack
+
+atlas = Atlas(
+    embedding_provider="azure_openai",
+)
+
+attack = Attack(
+    embedding_provider="azure_openai",
+)
+```
+
+Azure OpenAIでは `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` がAPI呼び出し時のモデル識別子になり、`emb_model`は使用しません。必須環境変数が不足している場合は、オブジェクト初期化時に `ValueError` を送出します。OpenAI用とAzure OpenAI用の環境変数が両方存在していても、`embedding_provider`で指定したproviderだけを使用します。
+
+### ベクトルDB
+
+初回実行時はChroma DBを自動作成し、進捗を表示します。再作成する場合は `initialize_vector=True` を指定します。
+
+DBはデータバージョンに加え、provider・モデルまたはAzure deployment・endpointごとに分離されます。ディレクトリ名末尾には設定を識別するハッシュが付きます。
+
+```text
+atlas/releases/<release>/chroma/openai-<model>-<hash>/
+atlas/releases/<release>/chroma/azure_openai-<deployment>-<hash>/
+
+attack/releases/<version>/<domain>/chroma/openai-<model>-<hash>/
+attack/releases/<version>/<domain>/chroma/azure_openai-<deployment>-<hash>/
+```
+
+この分離により、異なるモデルやproviderで作成したベクトルを誤って検索に使うことを防ぎます。旧バージョンが作成した `chroma` 直下のDBは再利用されず、認証情報設定後の初回オブジェクト初期化時に新しい保存先へ再構築されます。
+
 ## MITRE ATLAS
 
 ### 初期化とバージョン
@@ -41,7 +110,7 @@ from attack import Attack
 ```python
 from atlas import Atlas
 
-atlas = Atlas(version="2026.06")
+atlas = Atlas(version="2026.07")
 # atlas = Atlas()                 # 最新リリース
 # atlas = Atlas(version="5.6.0") # 旧format-version
 
@@ -94,18 +163,13 @@ for relationship in relationships:
 
 ### セマンティック検索
 
-環境変数を設定してから初期化します。
-
-```bash
-export OPENAI_API_KEY="your-api-key"
-```
-
 ```python
 from atlas import Atlas
 
 atlas = Atlas(
-    version="2026.06",
+    version="2026.07",
     emb_model="text-embedding-3-small",
+    embedding_provider="openai",  # または "azure_openai"
 )
 
 techniques = atlas.search_relevant_techniques(
@@ -119,8 +183,6 @@ steps = atlas.search_relevant_case_study_steps(
     top_k=3,
 )
 ```
-
-初回実行時はローカルのChroma DBを作成し、進捗を表示します。再作成する場合は `initialize_vector=True` を指定してください。DBはOSのユーザーデータディレクトリ以下の `atlas/releases/<release>/chroma` に保存されます。
 
 ## MITRE ATT&CK
 
@@ -179,7 +241,7 @@ print(group.get_description_include_references())
 
 ### セマンティック検索
 
-ATLASと同じく `OPENAI_API_KEY` が必要です。
+先にOpenAIまたはAzure OpenAIの環境変数を設定します。
 
 ```python
 from attack import Attack
@@ -188,6 +250,7 @@ attack = Attack(
     version="19.1",
     domain="enterprise",
     emb_model="text-embedding-3-small",
+    embedding_provider="openai",  # または "azure_openai"
 )
 
 techniques = attack.search_relevant_techniques(
@@ -202,8 +265,6 @@ procedures = attack.search_relevant_procedures(
     filter="all",  # campaign / group / software / all
 )
 ```
-
-初回実行時はローカルのChroma DBを作成し、進捗を表示します。DBはOSのユーザーデータディレクトリ以下の `attack/releases/<version>/<domain>/chroma` に保存されます。
 
 ## API命名規則と移行
 
@@ -231,7 +292,7 @@ uv run ty check
 uv run pytest -m "not integration" -v
 ```
 
-OpenAI APIを利用するintegration testは、`OPENAI_API_KEY`を設定して個別に実行します。
+Embedding APIを利用するintegration testは、必要な環境変数を設定して個別に実行します。
 
 ```bash
 uv run pytest -m integration -v
