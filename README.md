@@ -12,11 +12,11 @@ MITRE ATLAS と MITRE ATT&CK のデータを Python から扱うためのSDKで�
 リリース版をインストールする場合:
 
 ```bash
-pip install "security-databases-python @ git+https://github.com/Fuji-no-yama/security-databases-python@v1.0.1"
+pip install "security-databases-python @ git+https://github.com/Fuji-no-yama/security-databases-python@v1.1.0"
 ```
 
 ```bash
-uv add git+https://github.com/Fuji-no-yama/security-databases-python --tag v1.0.1
+uv add git+https://github.com/Fuji-no-yama/security-databases-python --tag v1.1.0
 ```
 
 開発版を利用する場合:
