@@ -1,0 +1,122 @@
+name: Merge to Main
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag (e.g., v1.0.0) - leave empty to just merge"
+        required: false
+        type: string
+
+jobs:
+  test:
+    name: Test (Production Mode)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fetch dev branch
+        run: git fetch origin dev:dev
+
+      - name: Merge package files from dev locally
+        run: |
+          git checkout dev -- atlas/
+          git checkout dev -- attack/
+          git checkout dev -- tests/
+          git checkout dev -- README.md
+          git checkout dev -- pyproject.toml
+          git checkout dev -- .env.dev.sample
+          git checkout dev -- .github/workflows/
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Build package
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          uv sync --all-groups
+          uv run python -m build
+
+      - name: Test installation from built package
+        run: |
+          python -m pip install dist/*.whl
+          mkdir -p /tmp/security-databases-test
+          cp -r tests /tmp/security-databases-test/
+          rm -rf atlas/ attack/
+          cd /tmp/security-databases-test
+          python -m pip install pytest
+          python -m pytest -m "not integration" -v
+
+  merge:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch dev branch
+        run: git fetch origin dev:dev
+
+      - name: Merge package files from dev
+        run: |
+          git checkout dev -- atlas/
+          git checkout dev -- attack/
+          git checkout dev -- tests/
+          git checkout dev -- README.md
+          git checkout dev -- pyproject.toml
+          git checkout dev -- .env.dev.sample
+          git checkout dev -- .github/workflows/
+
+      - name: Update version references in README
+        if: github.event.inputs.version != ''
+        run: |
+          sed -i "s|security-databases-python@[v0-9.]*|security-databases-python@${{ github.event.inputs.version }}|g" README.md
+          sed -i "s|--tag [v0-9.]*|--tag ${{ github.event.inputs.version }}|g" README.md
+
+      - name: Commit and push to main
+        run: |
+          git add atlas/ attack/ tests/ README.md pyproject.toml .env.dev.sample .github/workflows/
+          git commit -m "Merge library files from dev for release ${{ github.event.inputs.version || 'update' }}" || echo "No changes to commit"
+          git push origin main
+
+      - name: Create tag and release
+        if: github.event.inputs.version != ''
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          git tag ${{ github.event.inputs.version }}
+          git push origin ${{ github.event.inputs.version }}
+          gh release create ${{ github.event.inputs.version }} \
+            --title "${{ github.event.inputs.version }}" \
+            --notes "Release ${{ github.event.inputs.version }}" \
+            --target main
+
+      - name: Sync release README back to dev
+        if: github.event.inputs.version != ''
+        run: |
+          git checkout dev
+          git checkout main -- README.md
+          git add README.md
+          git commit -m "Sync release ${{ github.event.inputs.version }} README from main" || echo "No changes to commit"
+          git push origin dev

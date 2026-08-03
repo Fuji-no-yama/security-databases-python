@@ -1,0 +1,14 @@
+latest: "19.1"
+domains:
+  - enterprise
+  - mobile
+  - ics
+versions:
+  - version: "19.1"
+    path: "v19.1"
+  - version: "19.0"
+    path: "v19.0"
+  - version: "18.1"
+    path: "v18.1"
+  - version: "17.1"
+    path: "v17.1"

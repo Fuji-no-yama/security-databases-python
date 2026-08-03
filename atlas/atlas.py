@@ -1,0 +1,531 @@
+"""ATLASのv6形式データをロードするクラス。"""
+
+import shutil
+from contextlib import suppress
+from importlib.resources import files
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
+
+import chromadb
+import yaml
+from chromadb.api.models.Collection import Collection
+from chromadb.errors import NotFoundError
+from chromadb.utils import embedding_functions
+from platformdirs import user_data_dir
+from tqdm import tqdm
+
+from atlas import version_resolver
+from atlas.config import settings
+from atlas.entities import (
+    AtlasCaseStudy,
+    AtlasCaseStudyStep,
+    AtlasMitigation,
+    AtlasReference,
+    AtlasRelationship,
+    AtlasTactic,
+    AtlasTechnique,
+    RelationshipType,
+)
+
+if TYPE_CHECKING:
+    from importlib.abc import Traversable
+
+    from chromadb.api.client import ClientAPI
+
+T = TypeVar("T")
+
+
+class Atlas:
+    """
+    ATLASのv6データを保持しアクセスAPIを提供するクラス。
+
+    Args:
+        version (str | None): リリース識別子 (例: "2026.06") または
+            旧format-version (例: "5.6.0")。Noneの場合はmanifest.yaml先頭の最新リリース。
+            旧format-versionを指定した場合はmanifest経由で同一リリースのv6ファイルにフォールバックする。
+        emb_model (str): ベクトル化に使用するOpenAIモデル
+        initialize_vector (bool): ベクトルDBを初期化するかどうか
+    """
+
+    def __init__(
+        self,
+        *,
+        version: str | None = None,
+        emb_model: Literal["text-embedding-3-small", "text-embedding-3-large"] = "text-embedding-3-large",
+        initialize_vector: bool = False,
+    ) -> None:
+        release_input: str = version if version is not None else version_resolver.latest_release()
+        release, v6_path = version_resolver.resolve(release_input)
+        self.release: str = release
+        self.version: str = f"v{release}"
+        self.data_file: Traversable = files("atlas.data").joinpath(v6_path)
+        self.user_data_dir_path: Path = Path(user_data_dir("atlas")) / "releases" / release
+        self.user_data_dir_path.mkdir(parents=True, exist_ok=True)
+
+        with self.data_file.open() as f:
+            self._raw: dict[str, Any] = yaml.safe_load(f)
+
+        self.__create_tactic_list()
+        self.__create_tec_list()
+        self.__create_mit_list()
+        self.__create_casestudy_list()
+        self.__build_relationships()
+        self.__apply_relationships()
+
+        self.technique_chroma_collection: Collection | None = None
+        self.casestudy_chroma_collection: Collection | None = None
+
+        if settings.openai_api_key:
+            chroma_path = self.user_data_dir_path.joinpath("chroma")
+            if not chroma_path.is_dir():
+                print("ベクトルDBの設定がありません。初期化し作成します...")
+                initialize_vector = True
+            self.chroma_client: ClientAPI = chromadb.PersistentClient(str(chroma_path))
+            if initialize_vector or not chroma_path.is_dir():
+                self.__initialize_vector(model=emb_model)
+            self.technique_chroma_collection = self.__get_technique_chroma_collection(model=emb_model)
+            self.casestudy_chroma_collection = self.__get_casestudy_chroma_collection(model=emb_model)
+
+    @staticmethod
+    def _make_references(raw: list[dict[str, Any]] | None) -> list[AtlasReference] | None:
+        if not raw:
+            return None
+        refs: list[AtlasReference] = []
+        for r in raw:
+            title = r.get("title")
+            url = r.get("url")
+            if title is None or url is None:
+                continue
+            refs.append(AtlasReference(title=str(title), url=str(url), ref_id=r.get("id")))
+        return refs or None
+
+    def __create_tactic_list(self) -> None:
+        self.tactic_list: list[AtlasTactic] = []
+        self._tactics_by_id: dict[str, AtlasTactic] = {}
+        for tid, td in self._raw.get("tactics", {}).items():
+            tac = AtlasTactic(
+                tactic_id=tid,
+                name=td["name"],
+                description=td["description"],
+                tec_lis=[],
+                uuid=td.get("uuid"),
+                references=self._make_references(td.get("references")),
+            )
+            self.tactic_list.append(tac)
+            self._tactics_by_id[tid] = tac
+
+    def __create_tec_list(self) -> None:
+        self.technique_list: list[AtlasTechnique] = []
+        self._techniques_by_id: dict[str, AtlasTechnique] = {}
+        for tid, td in self._raw.get("techniques", {}).items():
+            tec = AtlasTechnique(
+                name=td["name"],
+                technique_id=tid,
+                description=td["description"],
+                have_parent=False,
+                parent_id=None,
+                tactics=[],
+                uuid=td.get("uuid"),
+                references=self._make_references(td.get("references")),
+                platforms=td.get("platforms"),
+                maturity=td.get("maturity"),
+            )
+            self.technique_list.append(tec)
+            self._techniques_by_id[tid] = tec
+
+    def __create_mit_list(self) -> None:
+        self.mitigation_list: list[AtlasMitigation] = []
+        self._mitigations_by_id: dict[str, AtlasMitigation] = {}
+        for mid, md in self._raw.get("mitigations", {}).items():
+            mit = AtlasMitigation(
+                mitigation_id=mid,
+                name=md["name"],
+                description=md["description"],
+                tec_lis=[],
+                uuid=md.get("uuid"),
+                references=self._make_references(md.get("references")),
+            )
+            self.mitigation_list.append(mit)
+            self._mitigations_by_id[mid] = mit
+
+    def __create_casestudy_list(self) -> None:
+        self.casestudy_list: list[AtlasCaseStudy] = []
+        self._casestudies_by_id: dict[str, AtlasCaseStudy] = {}
+        for cid, cd in self._raw.get("case-studies", {}).items():
+            refs = self._make_references(cd.get("references"))
+            cs_type = cd.get("type", "Exercise")
+            cs = AtlasCaseStudy(
+                casestudy_id=cid,
+                name=cd["name"],
+                summary=cd.get("description", ""),
+                step_list=[],
+                target=cd.get("target", ""),
+                actor=cd.get("actor", ""),
+                casestudy_type=cs_type,
+                reference_title_list=[r.title for r in refs] if refs else None,
+                reference_url_list=[r.url for r in refs] if refs else None,
+                uuid=cd.get("uuid"),
+                references=refs,
+            )
+            self.casestudy_list.append(cs)
+            self._casestudies_by_id[cid] = cs
+
+    def __build_relationships(self) -> None:
+        """v6の relationships セクションを AtlasRelationship のフラットリストに正規化する。"""
+        self.relationships: list[AtlasRelationship] = []
+        raw_relationships: dict[str, dict[str, list[dict[str, Any]]]] = self._raw.get("relationships", {})
+        known_types: set[str] = {"achieves", "specializes", "mitigates", "employs", "sequences"}
+        for groups in raw_relationships.values():
+            for rel_type, entries in groups.items():
+                if rel_type not in known_types:
+                    continue
+                for rel in entries:
+                    self.relationships.append(
+                        AtlasRelationship(
+                            source_id=str(rel["source"]),
+                            target_id=str(rel["target"]),
+                            type=cast("RelationshipType", rel_type),
+                            description=rel.get("description"),
+                            tactic_id=rel.get("tactic"),
+                            step_id=rel.get("step-id"),
+                            leads_to=rel.get("leads-to"),
+                            position=rel.get("position"),
+                            uuid=rel.get("uuid"),
+                            references=self._make_references(rel.get("references")),
+                            raw=rel,
+                        ),
+                    )
+
+    def __apply_relationships(self) -> None:  # noqa: C901, PLR0912
+        """self.relationships をもとに派生ビュー(technique.tactics 等)を materialize する。"""
+        for rel in self.relationships:
+            if rel.type == "achieves":
+                tec = self._techniques_by_id.get(rel.source_id)
+                tac = self._tactics_by_id.get(rel.target_id)
+                if tec is None or tac is None:
+                    continue
+                if tac not in tec.tactics:
+                    tec.tactics.append(tac)
+                if tec not in tac.technique_list:
+                    tac.technique_list.append(tec)
+            elif rel.type == "mitigates":
+                mit = self._mitigations_by_id.get(rel.source_id)
+                tec_m = self._techniques_by_id.get(rel.target_id)
+                if mit is None or tec_m is None:
+                    continue
+                if tec_m not in mit.technique_list:
+                    mit.technique_list.append(tec_m)
+            elif rel.type == "employs":
+                cs = self._casestudies_by_id.get(rel.source_id)
+                tec_e = self._techniques_by_id.get(rel.target_id)
+                tac_e = self._tactics_by_id.get(rel.tactic_id) if rel.tactic_id else None
+                if cs is None or tec_e is None or tac_e is None:
+                    continue
+                step_id_value: str = rel.step_id or ""
+                cs.procedure.append(
+                    AtlasCaseStudyStep(
+                        casestudy_step_id=f"{cs.id}.{step_id_value}",
+                        tactic=tac_e,
+                        technique=tec_e,
+                        description=rel.description or "",
+                        parent_id=cs.id,
+                        step_id=rel.step_id,
+                        leads_to=rel.leads_to,
+                    ),
+                )
+
+        for rel in self.relationships:
+            if rel.type != "specializes":
+                continue
+            child = self._techniques_by_id.get(rel.source_id)
+            parent = self._techniques_by_id.get(rel.target_id)
+            if child is None or parent is None:
+                continue
+            child.have_parent = True
+            child.parent_id = parent.id
+
+        # 旧v6リリース(specializes未導入)向けのフォールバック: ID命名規則 "AML.T####.###" からサブテクニックを推定
+        for tec in self.technique_list:
+            if tec.have_parent:
+                continue
+            parts: list[str] = tec.id.split(".")
+            subtechnique_parts_count: int = 3
+            if len(parts) >= subtechnique_parts_count and parts[0] == "AML" and parts[1].startswith("T"):
+                parent_id: str = ".".join(parts[:2])
+                parent_tec = self._techniques_by_id.get(parent_id)
+                if parent_tec is not None:
+                    tec.have_parent = True
+                    tec.parent_id = parent_id
+
+        for cs in self.casestudy_list:
+            cs.procedure.sort(key=lambda s: (s.step_id or ""))
+
+    def get_relationships(
+        self,
+        *,
+        source_id: str | None = None,
+        target_id: str | None = None,
+        type: RelationshipType | None = None,  # noqa: A002
+    ) -> list[AtlasRelationship]:
+        """
+        self.relationships を source_id / target_id / type で絞り込んだリストを返す。
+
+        Args:
+            source_id (str | None): 起点エンティティIDでフィルタ
+            target_id (str | None): 対象エンティティIDでフィルタ
+            type (RelationshipType | None): 関係種別でフィルタ
+
+        Returns:
+            list[AtlasRelationship]: 条件に一致するrelationshipのリスト
+        """
+        result: list[AtlasRelationship] = []
+        for rel in self.relationships:
+            if source_id is not None and rel.source_id != source_id:
+                continue
+            if target_id is not None and rel.target_id != target_id:
+                continue
+            if type is not None and rel.type != type:
+                continue
+            result.append(rel)
+        return result
+
+    def __initialize_vector(self, model: Literal["text-embedding-3-small", "text-embedding-3-large"]) -> None:
+        try:
+            self.__initialize_technique_vector(model=model)
+            self.__initialize_casestudy_vector(model=model)
+            print("ベクトルDBの初期化が完了しました。")
+        except Exception:
+            shutil.rmtree(str(self.user_data_dir_path.joinpath("chroma")))
+            raise
+
+    def __initialize_technique_vector(self, model: Literal["text-embedding-3-small", "text-embedding-3-large"]) -> None:
+        id_list: list[str] = []
+        desc_list: list[str] = []
+        metadata_list: list[dict[str, bool]] = []
+        for tec in self.technique_list:
+            id_list.append(tec.id)
+            desc_list.append(tec.description)
+            metadata_list.append({"is_parent": not tec.have_parent})
+        with suppress(NotFoundError):
+            self.chroma_client.delete_collection(name="atlas_technique")
+        openai_ef = embedding_functions.OpenAIEmbeddingFunction(
+            api_key=settings.openai_api_key,
+            model_name=model,
+        )
+        collection: Collection = self.chroma_client.get_or_create_collection(
+            name="atlas_technique",
+            metadata={"hnsw:space": "cosine"},
+            embedding_function=openai_ef,  # ty:ignore[invalid-argument-type]
+        )
+        print("テクニックベクトルDB初期化中...")
+        chunk_size = 200
+        for i in tqdm(range(0, len(id_list), chunk_size)):
+            end_idx = min(i + chunk_size, len(id_list))
+            collection.add(
+                documents=desc_list[i:end_idx],
+                ids=id_list[i:end_idx],
+                metadatas=metadata_list[i:end_idx],  # ty:ignore[invalid-argument-type]
+            )
+
+    def __initialize_casestudy_vector(self, model: Literal["text-embedding-3-small", "text-embedding-3-large"]) -> None:
+        id_list: list[str] = []
+        desc_list: list[str] = []
+        metadata_list: list[dict[str, int]] = []
+
+        for cs in self.casestudy_list:
+            for i, step in enumerate(cs.procedure):
+                id_list.append(step.id)
+                desc_list.append(step.description)
+                metadata_list.append({"step_number": i})
+
+        with suppress(NotFoundError):
+            self.chroma_client.delete_collection(name="atlas_casestudy")
+        openai_ef = embedding_functions.OpenAIEmbeddingFunction(
+            api_key=settings.openai_api_key,
+            model_name=model,
+        )
+        collection: Collection = self.chroma_client.get_or_create_collection(
+            name="atlas_casestudy",
+            metadata={"hnsw:space": "cosine"},
+            embedding_function=openai_ef,  # ty:ignore[invalid-argument-type]
+        )
+        print("ケーススタディベクトルDB初期化中...")
+        chunk_size = 200
+        for i in tqdm(range(0, len(id_list), chunk_size)):
+            end_idx = min(i + chunk_size, len(id_list))
+            collection.add(
+                documents=desc_list[i:end_idx],
+                ids=id_list[i:end_idx],
+                metadatas=metadata_list[i:end_idx],  # ty:ignore[invalid-argument-type]
+            )
+
+    def __get_technique_chroma_collection(
+        self,
+        model: Literal["text-embedding-3-small", "text-embedding-3-large"],
+    ) -> Collection:
+        openai_ef = embedding_functions.OpenAIEmbeddingFunction(
+            api_key=settings.openai_api_key,
+            model_name=model,
+        )
+        return self.chroma_client.get_collection(name="atlas_technique", embedding_function=openai_ef)  # ty:ignore[invalid-argument-type]
+
+    def __get_casestudy_chroma_collection(
+        self,
+        model: Literal["text-embedding-3-small", "text-embedding-3-large"],
+    ) -> Collection:
+        openai_ef = embedding_functions.OpenAIEmbeddingFunction(
+            api_key=settings.openai_api_key,
+            model_name=model,
+        )
+        return self.chroma_client.get_collection(name="atlas_casestudy", embedding_function=openai_ef)  # ty:ignore[invalid-argument-type]
+
+    def get_technique_by_id(self, tec_id: str) -> AtlasTechnique:
+        """
+        IDからテクニックを検索する。
+
+        Args:
+            tec_id (str): テクニックのID (例: "AML.T0042")
+
+        Returns:
+            AtlasTechnique: 検索されたテクニックオブジェクト
+        """
+        for tec in self.technique_list:
+            if tec.id == tec_id:
+                return tec
+        err_msg = f"'{tec_id}'が検索の結果見つかりませんでした。"
+        raise ValueError(err_msg)
+
+    def get_tactic_by_id(self, tac_id: str) -> AtlasTactic:
+        """
+        IDからタクティックを検索する。
+
+        Args:
+            tac_id (str): タクティックのID (例: "AML.TA0001")
+
+        Returns:
+            AtlasTactic: 検索されたタクティックオブジェクト
+        """
+        for tac in self.tactic_list:
+            if tac.id == tac_id:
+                return tac
+        err_msg = f"'{tac_id}'が検索の結果見つかりませんでした。"
+        raise ValueError(err_msg)
+
+    def get_mitigation_by_id(self, mit_id: str) -> AtlasMitigation:
+        """
+        IDから緩和策を検索する。
+
+        Args:
+            mit_id (str): 緩和策のID (例: "AML.M0000")
+
+        Returns:
+            AtlasMitigation: 検索された緩和策オブジェクト
+        """
+        for mit in self.mitigation_list:
+            if mit.id == mit_id:
+                return mit
+        err_msg = f"'{mit_id}'が検索の結果見つかりませんでした。"
+        raise ValueError(err_msg)
+
+    def get_case_study_by_id(self, cs_id: str) -> AtlasCaseStudy:
+        """
+        IDからケーススタディを検索する。
+
+        Args:
+            cs_id (str): ケーススタディのID (例: "AML.CS0026")
+
+        Returns:
+            AtlasCaseStudy: 検索されたケーススタディオブジェクト
+        """
+        for cs in self.casestudy_list:
+            if cs.id == cs_id:
+                return cs
+        err_msg = f"'{cs_id}'が検索の結果見つかりませんでした。"
+        raise ValueError(err_msg)
+
+    def get_case_study_step_by_id(self, cs_step_id: str) -> AtlasCaseStudyStep:
+        """
+        ケーススタディIDとステップIDからステップを検索する。
+
+        v6形式の "AML.CS0000.S00" と旧形式の "AML.CS0000.0" の両方を受け付ける。
+
+        Args:
+            cs_step_id (str): ケーススタディID+ステップID
+
+        Returns:
+            AtlasCaseStudyStep: 検索されたステップオブジェクト
+        """
+        for cs in self.casestudy_list:
+            for step in cs.procedure:
+                if step.id == cs_step_id:
+                    return step
+        err_msg = f"'{cs_step_id}'が検索の結果見つかりませんでした。"
+        raise ValueError(err_msg)
+
+    def search_relevant_techniques(
+        self,
+        query: str,
+        top_k: int,
+        *,
+        filter: Literal["parent", "child", "both"] = "both",  # noqa: A002
+    ) -> list[AtlasTechnique]:
+        """
+        クエリを元にベクトルDBを検索し関連テクニックを返す。
+
+        Args:
+            query (str): 検索文言
+            top_k (int): 上位取得件数
+            filter (str): "parent"のみ / "child"のみ / "both"
+
+        Returns:
+            list[AtlasTechnique]: 関連テクニックのリスト
+        """
+        if self.technique_chroma_collection is None:
+            err_msg = "ベクトルDB検索にはOPENAI_API_KEYの設定が必要です。"
+            raise ValueError(err_msg)
+        if filter == "parent":
+            result = self.technique_chroma_collection.query(query_texts=[query], n_results=top_k, where={"is_parent": True})
+        elif filter == "child":
+            result = self.technique_chroma_collection.query(query_texts=[query], n_results=top_k, where={"is_parent": False})
+        else:
+            result = self.technique_chroma_collection.query(query_texts=[query], n_results=top_k)
+        return [self.get_technique_by_id(tec_id=tec_id) for tec_id in result["ids"][0]]
+
+    def search_relevant_case_study_steps(
+        self,
+        query: str,
+        top_k: int,
+    ) -> list[AtlasCaseStudyStep]:
+        """
+        クエリを元にベクトルDBを検索し関連するケーススタディステップを返す。
+
+        Args:
+            query (str): 検索文言
+            top_k (int): 上位取得件数
+
+        Returns:
+            list[AtlasCaseStudyStep]: 関連するステップのリスト
+        """
+        if self.casestudy_chroma_collection is None:
+            err_msg = "ベクトルDB検索にはOPENAI_API_KEYの設定が必要です。"
+            raise ValueError(err_msg)
+        result = self.casestudy_chroma_collection.query(query_texts=[query], n_results=top_k)
+        return [self.get_case_study_step_by_id(cs_step_id=cs_step_id) for cs_step_id in result["ids"][0]]
+
+    def get_available_versions(self) -> list[str]:
+        """
+        利用可能なATLASリリース一覧を返す(v6形式のrelease識別子のみ)。
+
+        Returns:
+            list[str]: 昇順ソートされたrelease識別子のリスト
+        """
+        return version_resolver.list_releases()
+
+    def get_available_legacy_versions(self) -> list[str]:
+        """
+        version引数に指定可能な旧format-version(legacy)一覧を返す。
+
+        Returns:
+            list[str]: 昇順ソートされた旧format-versionのリスト
+        """
+        return version_resolver.list_legacy_versions()

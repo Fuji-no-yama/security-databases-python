@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "security-databases-python"
+dynamic = ["version"]
+description = "Python SDKs for MITRE ATLAS and MITRE ATT&CK security databases."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE", "NOTICE"]
+authors = [
+  { name = "Fuji-no-yama" }
+]
+dependencies = [
+  "chromadb",
+  "openai>=0.8.0",
+  "openpyxl>=3.1.5",
+  "pandas>=2.3.3",
+  "platformdirs>=4.3.7",
+  "pydantic-settings>=2.12.0",
+  "python-dotenv",
+  "pyyaml",
+  "tqdm",
+]
+
+[dependency-groups]
+dev = [
+  "build",
+  "pytest>=9.0.2",
+  "ruff",
+  "ty",
+]
+
+[project.urls]
+Homepage = "https://github.com/Fuji-no-yama/security-databases-python"
+Repository = "https://github.com/Fuji-no-yama/security-databases-python"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build]
+include = [
+  "/atlas",
+  "/attack",
+  "/README.md",
+  "/LICENSE",
+  "/NOTICE",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["atlas", "attack"]
+
+[tool.ruff]
+line-length = 150
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["D", "S", "PTH", "RET", "ASYNC", "T201", "RUF", "PLR0913", "PLR0917", "CPY001"]
+
+unfixable = ["F401", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["INP001", "PLR2004"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "integration: tests that require external API keys (OpenAI)",
+]

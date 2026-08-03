@@ -1,0 +1,32 @@
+security-databases-python
+Copyright (c) 2026 Fuji-no-yama
+
+This project distributes Python SDK code under the MIT License.
+
+Bundled MITRE ATT&CK data
+-------------------------
+This package includes MITRE ATT&CK data files.
+
+MITRE ATT&CK is a registered trademark of The MITRE Corporation.
+The MITRE Corporation grants a non-exclusive, royalty-free license to use
+ATT&CK for research, development, and commercial purposes, provided copies
+reproduce MITRE's copyright designation and license notice.
+
+Required ATT&CK notice:
+Copyright 2026 The MITRE Corporation. This work is reproduced and distributed
+with the permission of The MITRE Corporation.
+
+Source terms:
+https://attack.mitre.org/resources/terms-of-use/
+https://attack.mitre.org/resources/legal-and-branding/
+
+Bundled MITRE ATLAS data
+------------------------
+This package includes MITRE ATLAS data files.
+
+ATLAS is provided by The MITRE Corporation. The upstream ATLAS data repository
+states: Approved for Public Release; Distribution Unlimited. Public Release
+Case Number 26-1162. Copyright 2026 The MITRE Corporation. All rights reserved.
+
+Source repository:
+https://github.com/mitre-atlas/atlas-data
