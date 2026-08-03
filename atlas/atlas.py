@@ -10,12 +10,16 @@ import chromadb
 import yaml
 from chromadb.api.models.Collection import Collection
 from chromadb.errors import NotFoundError
-from chromadb.utils import embedding_functions
 from platformdirs import user_data_dir
 from tqdm import tqdm
 
+from _security_databases.embedding import (
+    EmbeddingModel,
+    EmbeddingProvider,
+    create_embedding_function,
+    resolve_embedding_configuration,
+)
 from atlas import version_resolver
-from atlas.config import settings
 from atlas.entities import (
     AtlasCaseStudy,
     AtlasCaseStudyStep,
@@ -43,7 +47,8 @@ class Atlas:
         version (str | None): リリース識別子 (例: "2026.06") または
             旧format-version (例: "5.6.0")。Noneの場合はmanifest.yaml先頭の最新リリース。
             旧format-versionを指定した場合はmanifest経由で同一リリースのv6ファイルにフォールバックする。
-        emb_model (str): ベクトル化に使用するOpenAIモデル
+        emb_model (str): OpenAI providerでベクトル化に使用するモデル。Azure OpenAIではdeployment設定を使用する
+        embedding_provider (str): "openai"または"azure_openai"
         initialize_vector (bool): ベクトルDBを初期化するかどうか
     """
 
@@ -51,7 +56,8 @@ class Atlas:
         self,
         *,
         version: str | None = None,
-        emb_model: Literal["text-embedding-3-small", "text-embedding-3-large"] = "text-embedding-3-large",
+        emb_model: EmbeddingModel = "text-embedding-3-large",
+        embedding_provider: EmbeddingProvider = "openai",
         initialize_vector: bool = False,
     ) -> None:
         release_input: str = version if version is not None else version_resolver.latest_release()
@@ -75,16 +81,19 @@ class Atlas:
         self.technique_chroma_collection: Collection | None = None
         self.casestudy_chroma_collection: Collection | None = None
 
-        if settings.openai_api_key:
-            chroma_path = self.user_data_dir_path.joinpath("chroma")
-            if not chroma_path.is_dir():
+        embedding_configuration = resolve_embedding_configuration(embedding_provider, emb_model)
+        if embedding_configuration is not None:
+            self._embedding_function = create_embedding_function(embedding_configuration)
+            self.chroma_path = self.user_data_dir_path / "chroma" / embedding_configuration.cache_key
+            has_vector_db = self.chroma_path.is_dir()
+            if not has_vector_db:
                 print("ベクトルDBの設定がありません。初期化し作成します...")
                 initialize_vector = True
-            self.chroma_client: ClientAPI = chromadb.PersistentClient(str(chroma_path))
-            if initialize_vector or not chroma_path.is_dir():
-                self.__initialize_vector(model=emb_model)
-            self.technique_chroma_collection = self.__get_technique_chroma_collection(model=emb_model)
-            self.casestudy_chroma_collection = self.__get_casestudy_chroma_collection(model=emb_model)
+            self.chroma_client: ClientAPI = chromadb.PersistentClient(str(self.chroma_path))
+            if initialize_vector:
+                self.__initialize_vector()
+            self.technique_chroma_collection = self.__get_technique_chroma_collection()
+            self.casestudy_chroma_collection = self.__get_casestudy_chroma_collection()
 
     @staticmethod
     def _make_references(raw: list[dict[str, Any]] | None) -> list[AtlasReference] | None:
@@ -289,16 +298,16 @@ class Atlas:
             result.append(rel)
         return result
 
-    def __initialize_vector(self, model: Literal["text-embedding-3-small", "text-embedding-3-large"]) -> None:
+    def __initialize_vector(self) -> None:
         try:
-            self.__initialize_technique_vector(model=model)
-            self.__initialize_casestudy_vector(model=model)
+            self.__initialize_technique_vector()
+            self.__initialize_casestudy_vector()
             print("ベクトルDBの初期化が完了しました。")
         except Exception:
-            shutil.rmtree(str(self.user_data_dir_path.joinpath("chroma")))
+            shutil.rmtree(self.chroma_path)
             raise
 
-    def __initialize_technique_vector(self, model: Literal["text-embedding-3-small", "text-embedding-3-large"]) -> None:
+    def __initialize_technique_vector(self) -> None:
         id_list: list[str] = []
         desc_list: list[str] = []
         metadata_list: list[dict[str, bool]] = []
@@ -308,14 +317,10 @@ class Atlas:
             metadata_list.append({"is_parent": not tec.have_parent})
         with suppress(NotFoundError):
             self.chroma_client.delete_collection(name="atlas_technique")
-        openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-            api_key=settings.openai_api_key,
-            model_name=model,
-        )
         collection: Collection = self.chroma_client.get_or_create_collection(
             name="atlas_technique",
             metadata={"hnsw:space": "cosine"},
-            embedding_function=openai_ef,  # ty:ignore[invalid-argument-type]
+            embedding_function=self._embedding_function,  # ty:ignore[invalid-argument-type]
         )
         print("テクニックベクトルDB初期化中...")
         chunk_size = 200
@@ -327,7 +332,7 @@ class Atlas:
                 metadatas=metadata_list[i:end_idx],  # ty:ignore[invalid-argument-type]
             )
 
-    def __initialize_casestudy_vector(self, model: Literal["text-embedding-3-small", "text-embedding-3-large"]) -> None:
+    def __initialize_casestudy_vector(self) -> None:
         id_list: list[str] = []
         desc_list: list[str] = []
         metadata_list: list[dict[str, int]] = []
@@ -340,14 +345,10 @@ class Atlas:
 
         with suppress(NotFoundError):
             self.chroma_client.delete_collection(name="atlas_casestudy")
-        openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-            api_key=settings.openai_api_key,
-            model_name=model,
-        )
         collection: Collection = self.chroma_client.get_or_create_collection(
             name="atlas_casestudy",
             metadata={"hnsw:space": "cosine"},
-            embedding_function=openai_ef,  # ty:ignore[invalid-argument-type]
+            embedding_function=self._embedding_function,  # ty:ignore[invalid-argument-type]
         )
         print("ケーススタディベクトルDB初期化中...")
         chunk_size = 200
@@ -359,25 +360,11 @@ class Atlas:
                 metadatas=metadata_list[i:end_idx],  # ty:ignore[invalid-argument-type]
             )
 
-    def __get_technique_chroma_collection(
-        self,
-        model: Literal["text-embedding-3-small", "text-embedding-3-large"],
-    ) -> Collection:
-        openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-            api_key=settings.openai_api_key,
-            model_name=model,
-        )
-        return self.chroma_client.get_collection(name="atlas_technique", embedding_function=openai_ef)  # ty:ignore[invalid-argument-type]
+    def __get_technique_chroma_collection(self) -> Collection:
+        return self.chroma_client.get_collection(name="atlas_technique", embedding_function=self._embedding_function)  # ty:ignore[invalid-argument-type]
 
-    def __get_casestudy_chroma_collection(
-        self,
-        model: Literal["text-embedding-3-small", "text-embedding-3-large"],
-    ) -> Collection:
-        openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-            api_key=settings.openai_api_key,
-            model_name=model,
-        )
-        return self.chroma_client.get_collection(name="atlas_casestudy", embedding_function=openai_ef)  # ty:ignore[invalid-argument-type]
+    def __get_casestudy_chroma_collection(self) -> Collection:
+        return self.chroma_client.get_collection(name="atlas_casestudy", embedding_function=self._embedding_function)  # ty:ignore[invalid-argument-type]
 
     def get_technique_by_id(self, tec_id: str) -> AtlasTechnique:
         """
@@ -481,7 +468,7 @@ class Atlas:
             list[AtlasTechnique]: 関連テクニックのリスト
         """
         if self.technique_chroma_collection is None:
-            err_msg = "ベクトルDB検索にはOPENAI_API_KEYの設定が必要です。"
+            err_msg = "選択したEmbedding providerの設定がないため、ベクトルDB検索は無効化されています。"
             raise ValueError(err_msg)
         if filter == "parent":
             result = self.technique_chroma_collection.query(query_texts=[query], n_results=top_k, where={"is_parent": True})
@@ -507,7 +494,7 @@ class Atlas:
             list[AtlasCaseStudyStep]: 関連するステップのリスト
         """
         if self.casestudy_chroma_collection is None:
-            err_msg = "ベクトルDB検索にはOPENAI_API_KEYの設定が必要です。"
+            err_msg = "選択したEmbedding providerの設定がないため、ベクトルDB検索は無効化されています。"
             raise ValueError(err_msg)
         result = self.casestudy_chroma_collection.query(query_texts=[query], n_results=top_k)
         return [self.get_case_study_step_by_id(cs_step_id=cs_step_id) for cs_step_id in result["ids"][0]]
