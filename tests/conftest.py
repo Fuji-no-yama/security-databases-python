@@ -6,7 +6,7 @@ from attack import Attack
 
 @pytest.fixture(scope="session")
 def atlas() -> Atlas:
-    return Atlas(version="2026.06")
+    return Atlas(version="2026.09")
 
 
 @pytest.fixture(scope="session")

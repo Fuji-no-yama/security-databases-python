@@ -12,11 +12,11 @@ MITRE ATLAS と MITRE ATT&CK のデータを Python から扱うためのSDKで�
 リリース版をインストールする場合:
 
 ```bash
-pip install "security-databases-python @ git+https://github.com/Fuji-no-yama/security-databases-python@v1.1.0"
+pip install "security-databases-python @ git+https://github.com/Fuji-no-yama/security-databases-python@v1.1.1"
 ```
 
 ```bash
-uv add git+https://github.com/Fuji-no-yama/security-databases-python --tag v1.1.0
+uv add git+https://github.com/Fuji-no-yama/security-databases-python --tag v1.1.1
 ```
 
 開発版を利用する場合:
@@ -110,7 +110,7 @@ attack/releases/<version>/<domain>/chroma/azure_openai-<deployment>-<hash>/
 ```python
 from atlas import Atlas
 
-atlas = Atlas(version="2026.07")
+atlas = Atlas(version="2026.09")
 # atlas = Atlas()                 # 最新リリース
 # atlas = Atlas(version="5.6.0") # 旧format-version
 
@@ -167,7 +167,7 @@ for relationship in relationships:
 from atlas import Atlas
 
 atlas = Atlas(
-    version="2026.07",
+    version="2026.09",
     emb_model="text-embedding-3-small",
     embedding_provider="openai",  # または "azure_openai"
 )
