@@ -110,7 +110,7 @@ attack/releases/<version>/<domain>/chroma/azure_openai-<deployment>-<hash>/
 ```python
 from atlas import Atlas
 
-atlas = Atlas(version="2026.07")
+atlas = Atlas(version="2026.09")
 # atlas = Atlas()                 # 最新リリース
 # atlas = Atlas(version="5.6.0") # 旧format-version
 
@@ -167,7 +167,7 @@ for relationship in relationships:
 from atlas import Atlas
 
 atlas = Atlas(
-    version="2026.07",
+    version="2026.09",
     emb_model="text-embedding-3-small",
     embedding_provider="openai",  # または "azure_openai"
 )

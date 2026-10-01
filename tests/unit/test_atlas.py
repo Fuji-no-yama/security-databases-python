@@ -4,7 +4,7 @@ from atlas import Atlas
 
 
 def test_atlas_loads_manifest_release(atlas: Atlas) -> None:
-    assert atlas.release == "2026.06"
+    assert atlas.release == "2026.09"
     assert atlas.get_available_versions()
     assert atlas.get_available_legacy_versions()
 
