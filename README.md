@@ -19,10 +19,10 @@ pip install "security-databases-python @ git+https://github.com/Fuji-no-yama/sec
 uv add git+https://github.com/Fuji-no-yama/security-databases-python --tag v1.1.1
 ```
 
-開発版を利用する場合:
+開発版(mainブランチの最新)を利用する場合:
 
 ```bash
-uv add git+https://github.com/Fuji-no-yama/security-databases-python --branch dev
+uv add git+https://github.com/Fuji-no-yama/security-databases-python --branch main
 ```
 
 既存SDKと同じimport pathを維持しています。
@@ -297,6 +297,12 @@ Embedding APIを利用するintegration testは、必要な環境変数を設定
 ```bash
 uv run pytest -m integration -v
 ```
+
+### ブランチとリリース
+
+- 開発は `main` ブランチ1本で行います。作業ブランチからmainへPRを作成すると、CI(lint・型チェック・Python 3.10〜3.13のテスト)が実行されます。
+- リリースはGitHubの **Actions > Release > Run workflow** から、バージョン(例: `v1.2.0`)を入力して実行します。mainの最新コミットからビルドしたwheelをテストし、成功するとタグとGitHub Release(wheel・sdist添付)が作成されます。
+- READMEのインストール手順に記載しているバージョン(`@vX.Y.Z` と `--tag vX.Y.Z`)は、リリース前のPRで更新してください。入力したバージョンと一致しない場合、Releaseワークフローはビルド前に失敗します。
 
 ## ライセンスとデータ
 

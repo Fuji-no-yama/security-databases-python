@@ -1,0 +1,9 @@
+# CI/CDとリリース設定
+/.github/workflows/ @Fuji-no-yama
+
+# パッケージングと依存関係
+/pyproject.toml @Fuji-no-yama
+/uv.lock @Fuji-no-yama
+
+# CODEOWNERS自体
+/.github/CODEOWNERS @Fuji-no-yama

@@ -1,0 +1,155 @@
+name: Release
+
+# GitHub上の Actions > Release > Run workflow から、バージョン(例: v1.2.0)を入力して実行する。
+# mainの最新コミットからパッケージをビルド・テストし、成功したらタグとGitHub Releaseを作成する。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g., v1.2.0)"
+        required: true
+        type: string
+
+# リリースは同時に1つだけ実行する(途中キャンセルはしない)
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  VERSION: ${{ inputs.version }}
+
+jobs:
+  validate:
+    name: Validate input
+    runs-on: ubuntu-latest
+    outputs:
+      package-version: ${{ steps.check.outputs.package-version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check branch, version format and tag
+        id: check
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Release must be run from main (got $GITHUB_REF)."
+            exit 1
+          fi
+          if ! echo "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Version must look like v1.2.3 (got '$VERSION')."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$VERSION" > /dev/null; then
+            echo "::error::Tag $VERSION already exists."
+            exit 1
+          fi
+          echo "package-version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+
+      # READMEのインストール手順のバージョンが入力と一致しているかを確認する
+      # (pipの "...security-databases-python@vX.Y.Z" と uvの "--tag vX.Y.Z" の両方)
+      - name: Check README version references
+        run: |
+          refs=$(grep -oE 'security-databases-python@v[0-9]+\.[0-9]+\.[0-9]+|--tag v[0-9]+\.[0-9]+\.[0-9]+' README.md || true)
+          if ! echo "$refs" | grep -q '^security-databases-python@'; then
+            echo "::error file=README.md::pip install example with '@vX.Y.Z' not found in README.md."
+            exit 1
+          fi
+          if ! echo "$refs" | grep -q '^--tag '; then
+            echo "::error file=README.md::uv add example with '--tag vX.Y.Z' not found in README.md."
+            exit 1
+          fi
+          mismatched=$(echo "$refs" | grep -vE "(@| )${VERSION//./\\.}\$" || true)
+          if [ -n "$mismatched" ]; then
+            echo "::error file=README.md::README.md references a different version than $VERSION. Update README.md in a PR before releasing."
+            echo "Mismatched references:"
+            echo "$mismatched"
+            exit 1
+          fi
+          echo "README.md references $VERSION correctly."
+
+  build:
+    name: Build package
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-python: true
+
+      # hatch-vcsはタグからバージョンを決めるが、タグはテスト成功後に作るため明示的に指定する
+      - name: Build sdist and wheel
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ needs.validate.outputs.package-version }}
+        run: uv build
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  test:
+    name: Test wheel (Python ${{ matrix.python-version }})
+    needs: [ validate, build ]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Install uv and Python ${{ matrix.python-version }}
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          cache-python: true
+
+      # ソースツリーではなくビルド済みwheelをimportさせるため、テストを別ディレクトリにコピーして実行する
+      - name: Install wheel and run tests
+        env:
+          PACKAGE_VERSION: ${{ needs.validate.outputs.package-version }}
+        run: |
+          WORK="$RUNNER_TEMP/wheel-test"
+          mkdir -p "$WORK"
+          cp -r tests pyproject.toml "$WORK/"
+          uv venv "$WORK/.venv"
+          uv pip install --python "$WORK/.venv" dist/*.whl pytest
+          cd "$WORK"
+          .venv/bin/python -c "import importlib.metadata as m, os; v = m.version('security-databases-python'); assert v == os.environ['PACKAGE_VERSION'], v; print('installed version:', v)"
+          .venv/bin/python -m pytest -m "not integration" -v
+
+  release:
+    name: Create tag and GitHub Release
+    needs: [ build, test ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      # タグはルールセット(release-tag-protection)で作成が制限されているため、
+      # バイパス権限を持つPATを使う。--targetでビルドしたコミットにタグを固定する。
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          gh release create "$VERSION" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            --generate-notes
