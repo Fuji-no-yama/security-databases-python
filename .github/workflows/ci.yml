@@ -2,38 +2,73 @@ name: CI
 
 on:
   push:
-    branches: [ dev ]
+    branches: [ main ]
   pull_request:
-    branches: [ dev ]
+    branches: [ main ]
+  workflow_dispatch:
+
+# 同一ブランチ/PRで新しい実行が始まったら古い実行をキャンセルする
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  test-dev:
-    name: Test (Development Mode)
+  lint:
+    name: Lint & Type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-python: true
+
+      - name: Install dependencies
+        run: uv sync --locked --all-groups
+
+      - name: Run lint
+        run: uv run ruff check --output-format=github
+
+      - name: Run type check
+        run: uv run ty check
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
-
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - name: Install uv and Python ${{ matrix.python-version }}
+        uses: astral-sh/setup-uv@v10
         with:
           python-version: ${{ matrix.python-version }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
+          enable-cache: true
+          cache-python: true
 
       - name: Install dependencies
-        run: uv sync --all-groups
-
-      - name: Run lint
-        run: uv run ruff check
-
-      - name: Run type check
-        run: uv run ty check
+        run: uv sync --locked --all-groups
 
       - name: Run tests
         run: uv run pytest -m "not integration" -v
+
+  # ブランチ保護の必須チェックにはこのジョブ1つだけを指定する
+  # (matrixの各ジョブ名を個別に登録しなくて済むようにするため)
+  ci-result:
+    name: CI result
+    if: always()
+    needs: [ lint, test ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all jobs succeeded
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: exit 1
