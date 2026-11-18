@@ -302,7 +302,7 @@ uv run pytest -m integration -v
 
 - 開発は `main` ブランチ1本で行います。作業ブランチからmainへPRを作成すると、CI(lint・型チェック・Python 3.10〜3.13のテスト)が実行されます。
 - リリースはGitHubの **Actions > Release > Run workflow** から、バージョン(例: `v1.2.0`)を入力して実行します。mainの最新コミットからビルドしたwheelをテストし、成功するとタグとGitHub Release(wheel・sdist添付)が作成されます。
-- READMEのインストール手順に記載しているバージョンは、リリース前のPRで更新してください。
+- READMEのインストール手順に記載しているバージョン(`@vX.Y.Z` と `--tag vX.Y.Z`)は、リリース前のPRで更新してください。入力したバージョンと一致しない場合、Releaseワークフローはビルド前に失敗します。
 
 ## ライセンスとデータ
 

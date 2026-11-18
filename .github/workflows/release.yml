@@ -47,6 +47,28 @@ jobs:
           fi
           echo "package-version=${VERSION#v}" >> "$GITHUB_OUTPUT"
 
+      # READMEのインストール手順のバージョンが入力と一致しているかを確認する
+      # (pipの "...security-databases-python@vX.Y.Z" と uvの "--tag vX.Y.Z" の両方)
+      - name: Check README version references
+        run: |
+          refs=$(grep -oE 'security-databases-python@v[0-9]+\.[0-9]+\.[0-9]+|--tag v[0-9]+\.[0-9]+\.[0-9]+' README.md || true)
+          if ! echo "$refs" | grep -q '^security-databases-python@'; then
+            echo "::error file=README.md::pip install example with '@vX.Y.Z' not found in README.md."
+            exit 1
+          fi
+          if ! echo "$refs" | grep -q '^--tag '; then
+            echo "::error file=README.md::uv add example with '--tag vX.Y.Z' not found in README.md."
+            exit 1
+          fi
+          mismatched=$(echo "$refs" | grep -vE "(@| )${VERSION//./\\.}\$" || true)
+          if [ -n "$mismatched" ]; then
+            echo "::error file=README.md::README.md references a different version than $VERSION. Update README.md in a PR before releasing."
+            echo "Mismatched references:"
+            echo "$mismatched"
+            exit 1
+          fi
+          echo "README.md references $VERSION correctly."
+
   build:
     name: Build package
     needs: validate
