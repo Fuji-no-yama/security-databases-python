@@ -8,7 +8,23 @@ import yaml
 if TYPE_CHECKING:
     from importlib.abc import Traversable
 
-_V6_FORMAT_VERSION = "6.0.0"
+_V6_MAJOR_VERSION = "6"
+
+
+def _is_v6_format(format_version: str) -> bool:
+    """
+    format-versionがv6系(6.0.0, 6.1.0, ...)かどうかを判定する。
+
+    v6系のマイナーバージョンアップ(例: 6.1.0)は後方互換な拡張であり、
+    同じローダで読み込めるためv6として扱う。
+
+    Args:
+        format_version (str): manifest.yamlのformat-version
+
+    Returns:
+        bool: v6系であればTrue
+    """
+    return format_version.split(".", 1)[0] == _V6_MAJOR_VERSION
 
 
 class ManifestEntry:
@@ -18,8 +34,9 @@ class ManifestEntry:
     Args:
         release (str): リリース識別子 (例: "2026.06")
         release_date (str): リリース日付
-        v6_path (str | None): このリリースにおけるv6形式ファイルの相対パス。無ければNone
+        v6_path (str | None): このリリースにおけるv6系形式ファイルの相対パス。無ければNone
         legacy_versions (list[str]): このリリースに含まれる旧format-version一覧
+        v6_format_version (str | None): v6系ファイルのformat-version (例: "6.1.0")。無ければNone
     """
 
     def __init__(
@@ -28,11 +45,13 @@ class ManifestEntry:
         release_date: str,
         v6_path: str | None,
         legacy_versions: list[str],
+        v6_format_version: str | None = None,
     ) -> None:
         self.release: str = release
         self.release_date: str = release_date
         self.v6_path: str | None = v6_path
         self.legacy_versions: list[str] = legacy_versions
+        self.v6_format_version: str | None = v6_format_version
 
 
 def _load_manifest() -> list[ManifestEntry]:
@@ -42,11 +61,13 @@ def _load_manifest() -> list[ManifestEntry]:
     entries: list[ManifestEntry] = []
     for item in raw:
         v6_path: str | None = None
+        v6_format_version: str | None = None
         legacy: list[str] = []
         for v in item.get("versions", []):
             fv = str(v["format-version"])
-            if fv == _V6_FORMAT_VERSION:
+            if _is_v6_format(fv):
                 v6_path = v["path"]
+                v6_format_version = fv
             else:
                 legacy.append(fv)
         entries.append(
@@ -55,6 +76,7 @@ def _load_manifest() -> list[ManifestEntry]:
                 release_date=str(item["release-date"]),
                 v6_path=v6_path,
                 legacy_versions=legacy,
+                v6_format_version=v6_format_version,
             ),
         )
     return entries
