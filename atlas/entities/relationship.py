@@ -46,7 +46,7 @@ class AtlasRelationship:
         raw (dict[str, Any]): 元のYAMLからロードした生辞書 (未モデル化フィールドの保持用)
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         source_id: str,
         target_id: str,

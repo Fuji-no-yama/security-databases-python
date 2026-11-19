@@ -1,11 +1,12 @@
 from typing import Any
 
-from ._render import AtlasRenderable, body_lines, label, references_list, refs, related_lines
+from _security_databases.render import Renderable, body_lines, label, references_list, refs, related_lines
+
 from .reference import AtlasReference
 from .technique import AtlasTechnique
 
 
-class AtlasTactic(AtlasRenderable):
+class AtlasTactic(Renderable):
     """
     ATLASのタクティックを表すクラス。
 
@@ -18,7 +19,7 @@ class AtlasTactic(AtlasRenderable):
         references (list[AtlasReference] | None): 外部参照リスト
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         tactic_id: str,
         name: str,
@@ -35,7 +36,7 @@ class AtlasTactic(AtlasRenderable):
         self.uuid: str | None = uuid
         self.references: list[AtlasReference] | None = references
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "tactic",
             "id": self.id,

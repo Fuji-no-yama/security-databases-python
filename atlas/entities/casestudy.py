@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING, Any, Literal
 
-from ._render import (
-    AtlasRenderable,
+from _security_databases.render import (
+    Renderable,
     body_lines,
     label,
     meta_line,
@@ -10,6 +10,7 @@ from ._render import (
     refs,
     related_lines,
 )
+
 from .reference import AtlasReference
 from .relationship import ActivityPurpose
 from .tactic import AtlasTactic
@@ -55,7 +56,7 @@ class AtlasCaseStudyAttribution:
         self.description: str | None = description
 
 
-class AtlasCaseStudyStep(AtlasRenderable):
+class AtlasCaseStudyStep(Renderable):
     """
     ケーススタディの1ステップ(procedure要素)を表すクラス。
 
@@ -72,7 +73,7 @@ class AtlasCaseStudyStep(AtlasRenderable):
         casestudy (AtlasCaseStudy | None): 親ケーススタディ
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         casestudy_step_id: str,
         tactic: AtlasTactic,
@@ -92,7 +93,7 @@ class AtlasCaseStudyStep(AtlasRenderable):
         self.leads_to: list[str] | None = leads_to
         self.casestudy: AtlasCaseStudy | None = None
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "case-study-step",
             "id": self.id,
@@ -116,7 +117,7 @@ class AtlasCaseStudyStep(AtlasRenderable):
         return lines
 
 
-class AtlasCaseStudy(AtlasRenderable):
+class AtlasCaseStudy(Renderable):
     """
     ATLASのケーススタディを表すクラス。
 
@@ -149,7 +150,7 @@ class AtlasCaseStudy(AtlasRenderable):
         いずれも6.1.0より前のリリースでは常に空
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         casestudy_id: str,
         name: str,
@@ -200,7 +201,7 @@ class AtlasCaseStudy(AtlasRenderable):
             return f"Period: {start} ({self.start_date_granularity})"
         return f"Period: {start} to {end}"
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "case-study",
             "id": self.id,

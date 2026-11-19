@@ -25,7 +25,7 @@ class FakeEmbeddingFunction(EmbeddingFunction[Documents]):
             vector = np.zeros(_DIMENSIONS, dtype=np.float32)
             for word in text.lower().split():
                 vector[int(hashlib.md5(word.encode()).hexdigest(), 16) % _DIMENSIONS] += 1.0  # noqa: S324
-            vectors.append(vector / (np.linalg.norm(vector) or 1.0))
+            vectors.append((vector / (np.linalg.norm(vector) or 1.0)).astype(np.float32))
         return vectors
 
     @staticmethod

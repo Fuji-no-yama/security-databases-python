@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import re
 import sys
 from importlib.resources import files
 from pathlib import Path
@@ -16,6 +17,9 @@ from _security_databases.embedding import (
     create_embedding_function,
     resolve_embedding_configuration,
 )
+from _security_databases.render import Renderable
+from _security_databases.search import LexicalIndex, compute_scores
+from _security_databases.vector_index import IndexSpec, VectorIndex
 from atlas import version_resolver
 from atlas.entities import (
     AtlasAssociatedEntity,
@@ -32,16 +36,18 @@ from atlas.entities import (
     AtlasTechnique,
     RelationshipType,
 )
-from atlas.entities._render import AtlasRenderable
-from atlas.search import AtlasSearchResult, LexicalIndex, compute_scores
-from atlas.vector_index import AtlasVectorIndex, IndexSpec
+from atlas.search import AtlasSearchResult
 
 if TYPE_CHECKING:
     from importlib.abc import Traversable
 
-T = TypeVar("T", bound=AtlasRenderable)
+T = TypeVar("T", bound=Renderable)
 
 logger = logging.getLogger("atlas")
+# ベクトル化する文章の作り方やコレクション構成を変えたら上げる。既存のベクトルDBは次回起動時に自動で再構築される。
+_INDEX_VERSION = "2"
+# クエリからATLAS IDを抽出する正規表現 (例: "AML.T0051", "AML.CS0044.S05")
+_ATLAS_ID_PATTERN = re.compile(r"\bAML\.[A-Z]+\d+(?:\.\d+)?(?:\.S\d+)?\b", re.IGNORECASE)
 _verbose_handler: logging.Handler | None = None
 
 # format-version 6.1.0 でケーススタディの項目名が変更されたもの (旧名 -> 新名)。
@@ -86,7 +92,7 @@ class Atlas:
             Falseの場合は何も出力しない(ロガー名 "atlas" で制御可能)
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         *,
         version: str | None = None,
@@ -117,15 +123,17 @@ class Atlas:
         self.__apply_relationships()
         self.__build_search_documents()
 
-        self._vector_index: AtlasVectorIndex | None = None
+        self._vector_index: VectorIndex | None = None
         embedding_configuration = resolve_embedding_configuration(embedding_provider, emb_model)
         if embedding_configuration is not None:
             self.chroma_path: Path = self.user_data_dir_path / "chroma" / embedding_configuration.cache_key
             self.chroma_path.mkdir(parents=True, exist_ok=True)
-            self._vector_index = AtlasVectorIndex(
+            self._vector_index = VectorIndex(
                 self.chroma_path,
                 create_embedding_function(embedding_configuration),
                 data_hash=hashlib.sha256(data_bytes).hexdigest()[:16],
+                index_version=_INDEX_VERSION,
+                logger_name="atlas",
                 show_progress=verbose,
             )
             self._vector_index.ensure(self.__index_specs(), force_rebuild=initialize_vector)
@@ -216,8 +224,7 @@ class Atlas:
                 description=ed.get("description", ""),
                 entity_type=ed["entity-type"],
                 associated_entities=[
-                    AtlasAssociatedEntity(name=str(a["name"]), description=a.get("description"))
-                    for a in ed.get("associated-entities") or []
+                    AtlasAssociatedEntity(name=str(a["name"]), description=a.get("description")) for a in ed.get("associated-entities") or []
                 ],
                 attack_reference=self._make_attack_reference(ed.get("attack-reference")),
                 uuid=ed.get("uuid"),
@@ -322,7 +329,7 @@ class Atlas:
         self.__apply_technique_hierarchy()
 
         for cs in self.casestudy_list:
-            cs.procedure.sort(key=lambda s: (s.step_id or ""))
+            cs.procedure.sort(key=lambda s: s.step_id or "")
 
     def __apply_achieves_relationship(self, rel: AtlasRelationship) -> None:
         """achieves (Technique → Tactic) を反映する。"""
@@ -456,9 +463,7 @@ class Atlas:
             "technique": {t.id: f"{t.name}\n\n{t.description}" for t in self.technique_list},
             "mitigation": {m.id: f"{m.name}\n\n{m.description}" for m in self.mitigation_list},
             "case_study": {cs.id: self.__case_study_document(cs) for cs in self.casestudy_list},
-            "case_study_step": {
-                step.id: f"{step.technique.name}\n\n{step.description}" for cs in self.casestudy_list for step in cs.procedure
-            },
+            "case_study_step": {step.id: f"{step.technique.name}\n\n{step.description}" for cs in self.casestudy_list for step in cs.procedure},
         }
         self._search_names: dict[SearchKind, dict[str, str]] = {
             "technique": {t.id: t.name for t in self.technique_list},
@@ -466,9 +471,7 @@ class Atlas:
             "case_study": {cs.id: cs.name for cs in self.casestudy_list},
             "case_study_step": {},
         }
-        self._lexical_indexes: dict[SearchKind, LexicalIndex] = {
-            kind: LexicalIndex(documents) for kind, documents in self._search_documents.items()
-        }
+        self._lexical_indexes: dict[SearchKind, LexicalIndex] = {kind: LexicalIndex(documents) for kind, documents in self._search_documents.items()}
 
     @staticmethod
     def __case_study_document(cs: AtlasCaseStudy) -> str:
@@ -492,7 +495,13 @@ class Atlas:
             err_msg = f"top_kは1以上を指定してください: {top_k}"
             raise ValueError(err_msg)
         semantic = self._vector_index.similarities(_COLLECTION_NAMES[kind], query) if self._vector_index is not None else None
-        scores = compute_scores(query, lexical=self._lexical_indexes[kind], names=self._search_names[kind], semantic=semantic)
+        scores = compute_scores(
+            query,
+            lexical=self._lexical_indexes[kind],
+            names=self._search_names[kind],
+            semantic=semantic,
+            id_pattern=_ATLAS_ID_PATTERN,
+        )
         ranked = sorted((doc_id for doc_id in scores if doc_id in candidates), key=lambda doc_id: (-scores[doc_id], doc_id))
         return [AtlasSearchResult(candidates[doc_id], scores[doc_id]) for doc_id in ranked[:top_k]]
 
@@ -617,7 +626,7 @@ class Atlas:
         """
         return self.__get_or_raise(self._software_by_id, software_id)
 
-    def search_relevant_techniques(  # noqa: PLR0913
+    def search_relevant_techniques(
         self,
         query: str,
         top_k: int,

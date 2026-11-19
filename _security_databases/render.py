@@ -1,11 +1,7 @@
-"""ATLASオブジェクトをAIエージェント向けのテキスト・辞書に変換する共通処理。"""
+"""ATLAS / ATT&CKのオブジェクトをAIエージェント向けのテキスト・辞書に変換する共通処理。"""
 
 import re
-from typing import TYPE_CHECKING, Any, Protocol
-
-if TYPE_CHECKING:
-    from .attack_reference import AtlasAttackReference
-    from .reference import AtlasReference
+from typing import Any, Protocol
 
 _MARKDOWN_LINK = re.compile(r"\[(.*?)\]\(.*?\)")
 # 説明文中の引用マーカー (例: "[[group-profile]]")。参照先はreferencesに含まれるためテキストでは除去する。
@@ -17,7 +13,12 @@ class _Named(Protocol):
     name: str
 
 
-class AtlasRenderable:
+class _IdUrl(Protocol):
+    id: str
+    url: str
+
+
+class Renderable:
     """
     to_text() / to_dict() を提供する基底クラス。
 
@@ -70,14 +71,14 @@ def label(obj: _Named) -> str:
     return f"{obj.id} {obj.name}"
 
 
-def attack_reference_dict(attack_reference: "AtlasAttackReference | None") -> dict[str, str] | None:
+def attack_reference_dict(attack_reference: _IdUrl | None) -> dict[str, str] | None:
     """ATT&CK参照を辞書に変換する。"""
     if attack_reference is None:
         return None
     return {"id": attack_reference.id, "url": attack_reference.url}
 
 
-def references_list(references: "list[AtlasReference] | None") -> list[dict[str, str]]:
+def references_list(references: "list[Any] | None") -> list[dict[str, str]]:
     """外部参照を {"title", "url"} のリストに変換する。"""
     return [{"title": r.title, "url": r.url} for r in references or []]
 

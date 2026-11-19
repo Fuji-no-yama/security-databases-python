@@ -1,8 +1,8 @@
 import re
 from typing import TYPE_CHECKING, Any, Literal
 
-from ._render import (
-    AtlasRenderable,
+from _security_databases.render import (
+    Renderable,
     attack_reference_dict,
     body_lines,
     label,
@@ -11,6 +11,7 @@ from ._render import (
     refs,
     related_lines,
 )
+
 from .attack_reference import AtlasAttackReference
 from .reference import AtlasReference
 
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 SoftwareType = Literal["Malware", "Tool"]
 
 
-class AtlasSoftware(AtlasRenderable):
+class AtlasSoftware(Renderable):
     """
     ATLASのソフトウェア(format-version 6.1.0で追加)を表すクラス。
 
@@ -46,7 +47,7 @@ class AtlasSoftware(AtlasRenderable):
         casestudy_list (list[AtlasCaseStudy]): このソフトウェアが使用されたケーススタディ (CaseStudy → Software uses の逆引き)
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         software_id: str,
         name: str,
@@ -76,7 +77,7 @@ class AtlasSoftware(AtlasRenderable):
         self.entity_list: list[AtlasEntity] = []
         self.casestudy_list: list[AtlasCaseStudy] = []
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "software",
             "id": self.id,

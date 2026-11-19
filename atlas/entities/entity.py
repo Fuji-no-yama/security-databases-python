@@ -1,8 +1,8 @@
 import re
 from typing import TYPE_CHECKING, Any, Literal
 
-from ._render import (
-    AtlasRenderable,
+from _security_databases.render import (
+    Renderable,
     attack_reference_dict,
     body_lines,
     clean_text,
@@ -12,6 +12,7 @@ from ._render import (
     refs,
     related_lines,
 )
+
 from .attack_reference import AtlasAttackReference
 from .reference import AtlasReference
 
@@ -37,7 +38,7 @@ class AtlasAssociatedEntity:
         self.description: str | None = description
 
 
-class AtlasEntity(AtlasRenderable):
+class AtlasEntity(Renderable):
     """
     ATLASのエンティティ(format-version 6.1.0で追加)を表すクラス。
 
@@ -62,7 +63,7 @@ class AtlasEntity(AtlasRenderable):
         reported_casestudy_list (list[AtlasCaseStudy]): このエンティティが報告したケーススタディ (reported-by の逆引き)
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         entity_id: str,
         name: str,
@@ -91,7 +92,7 @@ class AtlasEntity(AtlasRenderable):
         self.casestudy_list: list[AtlasCaseStudy] = []
         self.reported_casestudy_list: list[AtlasCaseStudy] = []
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "entity",
             "id": self.id,

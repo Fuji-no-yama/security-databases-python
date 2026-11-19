@@ -1,4 +1,4 @@
-"""ATLASのベクトルDB(Chroma)の作成・自動再構築・類似度検索を管理する。"""
+"""ATLAS / ATT&CK共通のベクトルDB(Chroma)の作成・自動再構築・類似度検索を管理する。"""
 
 import logging
 import sys
@@ -14,12 +14,6 @@ from tqdm import tqdm
 if TYPE_CHECKING:
     from chromadb.api.client import ClientAPI
     from chromadb.api.models.Collection import Collection
-
-logger = logging.getLogger("atlas")
-
-# ベクトル化する文章の作り方やコレクション構成を変えたら上げる。
-# 既存利用者のベクトルDBは次回起動時に自動で再構築される。
-INDEX_VERSION = "2"
 
 _BUILDING_SUFFIX = "__building"
 _CHUNK_SIZE = 200
@@ -41,7 +35,7 @@ class IndexSpec:
     documents: list[str]
 
 
-class AtlasVectorIndex:
+class VectorIndex:
     """
     ChromaのコレクションをIndexSpecに合わせて維持するクラス。
 
@@ -51,19 +45,33 @@ class AtlasVectorIndex:
     Args:
         path (Path): Chromaの永続化ディレクトリ
         embedding_function (Any): ChromaのEmbedding function
-        data_hash (str): ATLASデータファイルのハッシュ
+        data_hash (str): データファイルのハッシュ
+        index_version (str): ベクトル化する文章の作り方やコレクション構成のバージョン。
+            変更すると既存利用者のベクトルDBが次回起動時に自動で再構築される
+        logger_name (str): ログ出力に使うロガー名 ("atlas" / "attack")
         show_progress (bool): 再構築時に進捗バーを標準エラー出力に表示するか
     """
 
-    def __init__(self, path: Path, embedding_function: Any, data_hash: str, *, show_progress: bool = False) -> None:  # noqa: ANN401
+    def __init__(
+        self,
+        path: Path,
+        embedding_function: Any,  # noqa: ANN401
+        data_hash: str,
+        *,
+        index_version: str,
+        logger_name: str,
+        show_progress: bool = False,
+    ) -> None:
         self._client: ClientAPI = chromadb.PersistentClient(str(path))
         self._embedding_function = embedding_function
         self._data_hash = data_hash
+        self._index_version = index_version
+        self._logger = logging.getLogger(logger_name)
         self._show_progress = show_progress
         self._collections: dict[str, Collection] = {}
 
     def _expected_metadata(self) -> dict[str, str]:
-        return {"hnsw:space": "cosine", "index_version": INDEX_VERSION, "data_hash": self._data_hash}
+        return {"hnsw:space": "cosine", "index_version": self._index_version, "data_hash": self._data_hash}
 
     def _is_current(self, name: str) -> bool:
         try:
@@ -88,7 +96,7 @@ class AtlasVectorIndex:
         for collection in self._client.list_collections():
             name = collection if isinstance(collection, str) else collection.name
             if name not in expected_names:
-                logger.info("不要なコレクション '%s' を削除します。", name)
+                self._logger.info("不要なコレクション '%s' を削除します。", name)
                 self._client.delete_collection(name=name)
 
         for spec in specs:
@@ -97,7 +105,7 @@ class AtlasVectorIndex:
             self._collections[spec.name] = self._client.get_collection(name=spec.name, embedding_function=self._embedding_function)
 
     def _rebuild(self, spec: IndexSpec) -> None:
-        logger.info("ベクトルDB '%s' を構築します (%d件)。", spec.name, len(spec.ids))
+        self._logger.info("ベクトルDB '%s' を構築します (%d件)。", spec.name, len(spec.ids))
         building_name = f"{spec.name}{_BUILDING_SUFFIX}"
         with suppress(NotFoundError, ValueError):
             self._client.delete_collection(name=building_name)
@@ -122,7 +130,7 @@ class AtlasVectorIndex:
         with suppress(NotFoundError, ValueError):
             self._client.delete_collection(name=spec.name)
         building.modify(name=spec.name)
-        logger.info("ベクトルDB '%s' の構築が完了しました。", spec.name)
+        self._logger.info("ベクトルDB '%s' の構築が完了しました。", spec.name)
 
     def similarities(self, name: str, query: str) -> dict[str, float]:
         """
