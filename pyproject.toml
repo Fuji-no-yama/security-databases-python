@@ -81,4 +81,6 @@ filterwarnings = [
   # chromadbがAPIキーの直接指定や旧形式のembedding設定について出す警告 (本ライブラリでは対処不要)
   "ignore:Direct api_key configuration will not be persisted:DeprecationWarning:chromadb",
   "ignore:legacy embedding function config:DeprecationWarning:chromadb",
+  # Python 3.14でchromadb内部の asyncio.iscoroutinefunction 使用に対して出る警告
+  "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning:chromadb",
 ]

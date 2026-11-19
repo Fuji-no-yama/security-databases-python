@@ -277,7 +277,7 @@ Observed in case studies (4):
 
 - 関連オブジェクトは1段階だけ「IDと名前」で展開します。詳細が必要な場合は、そのIDで再度 `get_*_by_id` を呼び出します。
 - `to_text(max_related=10)` のように指定すると、関連オブジェクトの一覧ごとの表示件数を制限できます。
-- `to_text()` ではマークダウンリンクと引用マーカー (`[[...]]`) を除去します。`to_dict()` は各属性の値をそのまま返します。
+- `to_text()` ではマークダウンリンクを表示名に置き換え、引用マーカー (`[[...]]`) を除去し、書式用のHTMLタグ (`<code>` → `` `...` ``、`<br>` → 改行、`<b>`) とHTMLエンティティ (`&lt;` など) を変換します。`/proc/<PID>/maps` のようなプレースホルダーや、攻撃例として書かれたタグ (`<script>` など) は内容の一部なのでそのまま残します。`to_dict()` は各属性の値をそのまま返します。
 
 ## MITRE ATT&CK
 
@@ -438,7 +438,7 @@ Procedure examples (64):
 - ... and 61 more
 ```
 
-`to_text()` はSTIXの原文 (`raw_description`) から、ATT&CKへのリンクを表示名に置き換え、引用 `(Citation: ...)` を除去した説明文を出力します。従来の `description` 属性(引用を番号に整形したもの)はそのままです。
+`to_text()` はSTIXの原文 (`raw_description`) から、ATT&CKへのリンクを表示名に置き換え、引用 `(Citation: ...)` を除去した説明文を出力します。HTMLタグ・エンティティの扱いはATLASと同じです。従来の `description` 属性(引用を番号に整形したもの)はそのままです。
 
 ## API命名規則と移行
 
@@ -488,7 +488,7 @@ Embedding APIを利用するintegration testは、必要な環境変数を設定
 uv run pytest -m integration -v
 ```
 
-単体テストは、APIキーが設定されていても有料のEmbedding APIを呼ばないようになっています。
+単体テストは、APIキーが設定されていても有料のEmbedding APIを呼ばないようになっています。`tests/unit/test_data_quality.py` は同梱する全リリース・全バージョンについて、名前・説明文が空でないこと、文字化けがないこと、テキスト出力に整形漏れがないことを検査します。
 
 ### ATT&CKデータの更新
 
@@ -500,7 +500,7 @@ uv run python scripts/update_attack_data.py 20.1
 
 ### ブランチとリリース
 
-- 開発は `main` ブランチ1本で行います。作業ブランチからmainへPRを作成すると、CI(lint・型チェック・Python 3.10〜3.13のテスト)が実行されます。
+- 開発は `main` ブランチ1本で行います。作業ブランチからmainへPRを作成すると、CI(lint・フォーマット・型チェック・Python 3.10〜3.14のテスト)が実行されます。
 - リリースはGitHubの **Actions > Release > Run workflow** から、バージョン(例: `v1.2.0`)を入力して実行します。mainの最新コミットからビルドしたwheelをテストし、成功するとタグとGitHub Release(wheel・sdist添付)が作成されます。
 - READMEのインストール手順に記載しているバージョン(`@vX.Y.Z` と `--tag vX.Y.Z`)は、リリース前のPRで更新してください。入力したバージョンと一致しない場合、Releaseワークフローはビルド前に失敗します。
 
