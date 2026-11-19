@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING, Any, Literal
 
-from ._render import (
-    AtlasRenderable,
+from _security_databases.render import (
+    Renderable,
     body_lines,
     label,
     meta_line,
@@ -10,6 +10,7 @@ from ._render import (
     refs,
     related_lines,
 )
+
 from .reference import AtlasReference
 from .relationship import ActivityPurpose
 from .tactic import AtlasTactic
@@ -55,7 +56,7 @@ class AtlasCaseStudyAttribution:
         self.description: str | None = description
 
 
-class AtlasCaseStudyStep(AtlasRenderable):
+class AtlasCaseStudyStep(Renderable):
     """
     ケーススタディの1ステップ(procedure要素)を表すクラス。
 
@@ -116,7 +117,7 @@ class AtlasCaseStudyStep(AtlasRenderable):
         return lines
 
 
-class AtlasCaseStudy(AtlasRenderable):
+class AtlasCaseStudy(Renderable):
     """
     ATLASのケーススタディを表すクラス。
 

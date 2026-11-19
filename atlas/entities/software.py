@@ -1,8 +1,8 @@
 import re
 from typing import TYPE_CHECKING, Any, Literal
 
-from ._render import (
-    AtlasRenderable,
+from _security_databases.render import (
+    Renderable,
     attack_reference_dict,
     body_lines,
     label,
@@ -11,6 +11,7 @@ from ._render import (
     refs,
     related_lines,
 )
+
 from .attack_reference import AtlasAttackReference
 from .reference import AtlasReference
 
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 SoftwareType = Literal["Malware", "Tool"]
 
 
-class AtlasSoftware(AtlasRenderable):
+class AtlasSoftware(Renderable):
     """
     ATLASのソフトウェア(format-version 6.1.0で追加)を表すクラス。
 

@@ -1,8 +1,8 @@
 import re
 from typing import TYPE_CHECKING, Any, Literal
 
-from ._render import (
-    AtlasRenderable,
+from _security_databases.render import (
+    Renderable,
     attack_reference_dict,
     body_lines,
     clean_text,
@@ -12,6 +12,7 @@ from ._render import (
     refs,
     related_lines,
 )
+
 from .attack_reference import AtlasAttackReference
 from .reference import AtlasReference
 
@@ -37,7 +38,7 @@ class AtlasAssociatedEntity:
         self.description: str | None = description
 
 
-class AtlasEntity(AtlasRenderable):
+class AtlasEntity(Renderable):
     """
     ATLASのエンティティ(format-version 6.1.0で追加)を表すクラス。
 

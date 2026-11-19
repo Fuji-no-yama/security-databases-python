@@ -1,8 +1,8 @@
 import re
 from typing import TYPE_CHECKING, Any
 
-from ._render import (
-    AtlasRenderable,
+from _security_databases.render import (
+    Renderable,
     attack_reference_dict,
     body_lines,
     label,
@@ -12,6 +12,7 @@ from ._render import (
     refs,
     related_lines,
 )
+
 from .attack_reference import AtlasAttackReference
 from .reference import AtlasReference
 
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
     from .tactic import AtlasTactic
 
 
-class AtlasTechnique(AtlasRenderable):
+class AtlasTechnique(Renderable):
     """
     ATLASのテクニックを表すクラス。
 

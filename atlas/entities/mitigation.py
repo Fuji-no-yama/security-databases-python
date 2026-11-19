@@ -1,12 +1,13 @@
 import re
 from typing import Any
 
-from ._render import AtlasRenderable, body_lines, label, references_list, refs, related_lines
+from _security_databases.render import Renderable, body_lines, label, references_list, refs, related_lines
+
 from .reference import AtlasReference
 from .technique import AtlasTechnique
 
 
-class AtlasMitigation(AtlasRenderable):
+class AtlasMitigation(Renderable):
     """
     ATLASの緩和策(mitigation)を表すクラス。
 
