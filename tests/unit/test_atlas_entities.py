@@ -1,12 +1,13 @@
 import pytest
 
 from atlas import Atlas
+from tests.conftest import build_without_embedding_api
 
 
 @pytest.fixture(scope="module")
 def atlas_6_0() -> Atlas:
     """format-version 6.0.0 の最終リリース。"""
-    return Atlas(version="2026.09")
+    return build_without_embedding_api(lambda: Atlas(version="2026.09"))
 
 
 def test_loads_entities_and_software(atlas: Atlas) -> None:
