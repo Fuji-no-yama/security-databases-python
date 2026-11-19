@@ -46,17 +46,14 @@ class AttackAbstractMitigation(Renderable):  # 1つの抽象緩和策を表す�
                         desc += f"- [{i}] {ref.id} {ref.url}\n"
         return desc
 
-
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "mitigation",
             "id": self.id,
             "name": self.name,
             "domain": self.domain,
             "description": self.description,
-            "techniques": [
-                {**technique_ref(c.technique), "description": c.description} for c in self.concrete_mitigation_list if c.technique
-            ],
+            "techniques": [{**technique_ref(c.technique), "description": c.description} for c in self.concrete_mitigation_list if c.technique],
             "references": reference_dicts(self.reference_list),
         }
 

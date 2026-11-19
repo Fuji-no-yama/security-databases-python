@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 class AttackCampaign(Renderable):
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         name: str,
         campaign_id: str,
@@ -59,7 +59,7 @@ class AttackCampaign(Renderable):
                         desc += f"- [{i}] {ref.id} {ref.url}\n"
         return desc
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "campaign",
             "id": self.id,

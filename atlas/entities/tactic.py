@@ -19,7 +19,7 @@ class AtlasTactic(Renderable):
         references (list[AtlasReference] | None): 外部参照リスト
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         tactic_id: str,
         name: str,
@@ -36,7 +36,7 @@ class AtlasTactic(Renderable):
         self.uuid: str | None = uuid
         self.references: list[AtlasReference] | None = references
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "tactic",
             "id": self.id,

@@ -50,7 +50,7 @@ class AtlasTechnique(Renderable):
             6.1.0より前のリリースでは常に空
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         name: str,
         technique_id: str,
@@ -96,7 +96,7 @@ class AtlasTechnique(Renderable):
         replacement = r"\1"
         return re.sub(pattern, replacement, desc)
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "technique",
             "id": self.id,

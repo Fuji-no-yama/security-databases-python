@@ -66,7 +66,7 @@ def update_manifest(versions: list[str]) -> None:
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True))
 
 
-def main() -> int:  # noqa: D103
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("versions", nargs="+", help="取得するATT&CKバージョン (例: 20.1)")
     args = parser.parse_args()

@@ -10,14 +10,14 @@ from .technique import AttackTechnique
 
 __all__: list[str] = [
     "AttackAbstractMitigation",
+    "AttackCampaign",
     "AttackConcreteMitigation",
+    "AttackExternalReference",
+    "AttackGroup",
+    "AttackInternalReference",
+    "AttackProcedure",
+    "AttackRelationship",
+    "AttackSoftware",
     "AttackTactic",
     "AttackTechnique",
-    "AttackExternalReference",
-    "AttackInternalReference",
-    "AttackCampaign",
-    "AttackProcedure",
-    "AttackGroup",
-    "AttackSoftware",
-    "AttackRelationship",
 ]

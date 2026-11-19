@@ -20,7 +20,7 @@ class AtlasMitigation(Renderable):
         references (list[AtlasReference] | None): 外部参照リスト
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         mitigation_id: str,
         name: str,
@@ -63,7 +63,7 @@ class AtlasMitigation(Renderable):
         replacement = r"\1"
         return re.sub(pattern, replacement, desc)
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "mitigation",
             "id": self.id,

@@ -52,7 +52,7 @@ class VectorIndex:
         show_progress (bool): 再構築時に進捗バーを標準エラー出力に表示するか
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         path: Path,
         embedding_function: Any,  # noqa: ANN401

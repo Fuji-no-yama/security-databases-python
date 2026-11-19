@@ -26,10 +26,9 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-  "build",
-  "pytest>=9.0.2",
-  "ruff",
-  "ty",
+  "pytest>=9.2.0",
+  "ruff>=0.17.5",
+  "ty>=0.0.107",
 ]
 
 [project.urls]
@@ -57,16 +56,29 @@ line-length = 150
 
 [tool.ruff.lint]
 select = ["ALL"]
-ignore = ["D", "S", "PTH", "RET", "ASYNC", "T201", "RUF", "PLR0913", "PLR0917", "CPY001"]
-
-unfixable = ["F401", "E501"]
+ignore = [
+  "D",        # docstringは日本語のGoogleスタイルで書くため、pydocstyleの句読点・改行位置の規則は適用しない
+  "RUF001",   # 日本語の全角文字を「紛らわしい文字」と誤検知するため
+  "RUF002",
+  "RUF003",
+  "PLR0913",  # データクラス的なコンストラクタは引数が多くなる
+  "PLR0917",
+  "CPY001",   # ファイルごとの著作権表記は不要 (LICENSE / NOTICE で管理)
+]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["INP001", "PLR2004"]
+"tests/**" = ["INP001", "PLR2004", "S101"]
 "scripts/**" = ["INP001", "T201"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# anyio (chromadb / openai の依存) のpytestプラグインは非同期テストが無いため使わない
+addopts = ["--strict-markers", "--strict-config", "-p", "no:anyio"]
 markers = [
   "integration: tests that require external API keys (OpenAI)",
+]
+filterwarnings = [
+  # chromadbがAPIキーの直接指定や旧形式のembedding設定について出す警告 (本ライブラリでは対処不要)
+  "ignore:Direct api_key configuration will not be persisted:DeprecationWarning:chromadb",
+  "ignore:legacy embedding function config:DeprecationWarning:chromadb",
 ]

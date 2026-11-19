@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 class AttackGroup(Renderable):
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         name: str,
         group_id: str,
@@ -55,7 +55,7 @@ class AttackGroup(Renderable):
                         desc += f"- [{i}] {ref.id} {ref.url}\n"
         return desc
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "group",
             "id": self.id,

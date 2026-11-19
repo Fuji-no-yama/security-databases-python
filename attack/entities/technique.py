@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 class AttackTechnique(Renderable):
-    def __init__(  # noqa: PLR0913 (引数総数警告)
+    def __init__(
         self,
         name: str,
         technique_id: str,
@@ -72,7 +72,7 @@ class AttackTechnique(Renderable):
                         desc += f"- [{i}] {ref.id} {ref.url}\n"
         return desc
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "technique",
             "id": self.id,

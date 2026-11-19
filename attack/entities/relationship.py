@@ -24,7 +24,7 @@ class AttackRelationship:
         raw (dict[str, Any] | None): 元のSTIX relationship
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         source_id: str,
         target_id: str,

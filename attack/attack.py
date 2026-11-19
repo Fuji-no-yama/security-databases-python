@@ -74,7 +74,6 @@ _PROCEDURE_PARENT_TYPES: dict[str, str] = {
 }
 
 
-
 def _enable_verbose_logging() -> None:
     """ロガー "attack" の INFO 以上を標準エラー出力に表示する。"""
     global _verbose_handler  # noqa: PLW0603
@@ -92,7 +91,7 @@ class Attack:
     tactic_list: list[AttackTactic]
     mitigation_list: list[AttackAbstractMitigation]
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         *,  # 以下をキーワード引数に
         domain: str = "enterprise",
@@ -112,7 +111,7 @@ class Attack:
                 通常はデータやライブラリの更新を検知して自動で再構築されるため指定不要
             verbose (bool): TrueならベクトルDB構築などの進捗を標準エラー出力に表示する。
                 Falseの場合は何も出力しない(ロガー名 "attack" で制御可能)
-        """  # noqa: E501
+        """
         if verbose:
             _enable_verbose_logging()
         available_domains: list[str] = version_resolver.list_domains()
@@ -713,7 +712,7 @@ class Attack:
         err_msg = f"procedure_id: {procedure_id} は存在しません"
         raise ValueError(err_msg)
 
-    def search_relevant_techniques(  # noqa: PLR0913
+    def search_relevant_techniques(
         self,
         query: str,
         top_k: int,
@@ -854,9 +853,7 @@ class Attack:
         self._search_documents: dict[SearchKind, dict[str, str]] = {
             "technique": {t.id: f"{t.full_name}\n\n{self.__plain(t)}" for t in self.technique_list},
             "mitigation": {m.id: f"{m.name}\n\n{self.__plain(m)}" for m in self.mitigation_list},
-            "procedure": {
-                key: self.__procedure_document(p) for key, p in self._search_items["procedure"].items()
-            },
+            "procedure": {key: self.__procedure_document(p) for key, p in self._search_items["procedure"].items()},
             "group": {g.id: named(g) for g in self.group_list},
             "software": {s.id: named(s) for s in self.software_list},
             "campaign": {c.id: named(c) for c in self.campaign_list},

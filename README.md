@@ -130,8 +130,8 @@ atlas.tactic_list
 atlas.technique_list
 atlas.mitigation_list
 atlas.casestudy_list
-atlas.entity_list      # 2026.10以降
-atlas.software_list    # 2026.10以降
+atlas.entity_list  # 2026.10以降
+atlas.software_list  # 2026.10以降
 atlas.relationships
 ```
 
@@ -163,22 +163,22 @@ format-version 6.1.0 (リリース2026.10) から、活動主体を表すエン�
 atlas = Atlas(version="2026.10")
 
 case_study = atlas.get_case_study_by_id("AML.CS0044")
-for attribution in case_study.attributions:          # 帰属先と活動目的
+for attribution in case_study.attributions:  # 帰属先と活動目的
     print(attribution.entity.name, attribution.activity_purpose)  # APT28 Adversarial Operation
-print([e.name for e in case_study.reported_by])        # 報告者エンティティ
-print([s.name for s in case_study.software_list])      # 使用されたソフトウェア
+print([e.name for e in case_study.reported_by])  # 報告者エンティティ
+print([s.name for s in case_study.software_list])  # 使用されたソフトウェア
 print(case_study.start_date, case_study.start_date_granularity, case_study.end_date)
 
 entity = atlas.get_entity_by_id("AML.E0018")
 print(entity.entity_type, entity.attack_reference.id)  # Activity Cluster G0007
-print([s.name for s in entity.software_list])          # LAMEHUG
+print([s.name for s in entity.software_list])  # LAMEHUG
 
 software = atlas.get_software_by_id("AML.S0015")
-print(software.aliases)                                # ['PROMPTSTEAL']
-print([t.id for t in software.technique_list])         # 実装するテクニック
+print(software.aliases)  # ['PROMPTSTEAL']
+print([t.id for t in software.technique_list])  # 実装するテクニック
 
 technique = atlas.get_technique_by_id("AML.T0102")
-print([s.name for s in technique.software_list])       # このテクニックを実装するソフトウェア
+print([s.name for s in technique.software_list])  # このテクニックを実装するソフトウェア
 ```
 
 ライブラリはデータに存在する値のみを返し、リリース間の差異を推測で補完しません。
@@ -217,10 +217,10 @@ atlas = Atlas(
 techniques = atlas.search_relevant_techniques(
     query="malware that uses an LLM to generate commands",
     top_k=5,
-    filter="both",            # parent / child / both
-    tactic_id=None,           # 例: "AML.TA0002"
-    platform=None,            # 例: "Agentic AI"
-    maturity=None,            # "Feasible" / "Demonstrated" / "Realized"
+    filter="both",  # parent / child / both
+    tactic_id=None,  # 例: "AML.TA0002"
+    platform=None,  # 例: "Agentic AI"
+    maturity=None,  # "Feasible" / "Demonstrated" / "Realized"
 )
 mitigations = atlas.search_relevant_mitigations("prompt injection defenses", top_k=5)
 case_studies = atlas.search_relevant_case_studies("attack by Russian state-sponsored group", top_k=3, casestudy_type="Incident")
@@ -251,7 +251,7 @@ results = atlas.search_relevant_techniques("AML.T0102", top_k=1)
 print(results[0].to_text())
 
 atlas.get_case_study_by_id("AML.CS0044").to_text()
-atlas.get_entity_by_id("AML.E0018").to_dict()   # JSONに変換可能な辞書
+atlas.get_entity_by_id("AML.E0018").to_dict()  # JSONに変換可能な辞書
 ```
 
 ```text
@@ -341,15 +341,15 @@ STIXから取得できる次の情報も利用できます。
 
 ```python
 technique = attack.get_technique_by_id("T1548.002")
-print(technique.name)                    # Bypass User Account Control
-print(technique.full_name)               # Abuse Elevation Control Mechanism: Bypass User Account Control
+print(technique.name)  # Bypass User Account Control
+print(technique.full_name)  # Abuse Elevation Control Mechanism: Bypass User Account Control
 print(technique.parent.id, technique.platforms, technique.url)
 print([t.id for t in attack.get_technique_by_id("T1548").subtechnique_list])
 
 group = attack.get_group_by_id("G0007")
-print(group.aliases)                     # 別名
-print([s.name for s in group.software_list])   # 使用するソフトウェア
-print([c.id for c in group.campaign_list])     # 帰属するキャンペーン
+print(group.aliases)  # 別名
+print([s.name for s in group.software_list])  # 使用するソフトウェア
+print([c.id for c in group.campaign_list])  # 帰属するキャンペーン
 
 software = attack.get_software_by_id("S0001")
 print(software.software_type, [g.id for g in software.group_list])
@@ -386,18 +386,18 @@ attack = Attack(
 techniques = attack.search_relevant_techniques(
     "obtaining credentials from LSASS process memory",
     top_k=5,
-    filter="both",            # parent / child / both
-    tactic_id=None,           # 例: "TA0006"
-    platform=None,            # 例: "Windows"
+    filter="both",  # parent / child / both
+    tactic_id=None,  # 例: "TA0006"
+    platform=None,  # 例: "Windows"
 )
 procedures = attack.search_relevant_procedures(
     "dumped LSASS memory using comsvcs.dll",
     top_k=5,
-    filter="all",             # campaign / group / software / all
-    technique_id=None,        # 例: "T1003.001"
+    filter="all",  # campaign / group / software / all
+    technique_id=None,  # 例: "T1003.001"
 )
 mitigations = attack.search_relevant_mitigations("defend against phishing emails", top_k=3)
-groups = attack.search_relevant_groups("Russian military intelligence GRU unit", top_k=3)   # 名前・別名・説明文
+groups = attack.search_relevant_groups("Russian military intelligence GRU unit", top_k=3)  # 名前・別名・説明文
 software = attack.search_relevant_software("open-source credential dumping tool", top_k=3, software_type="tool")
 campaigns = attack.search_relevant_campaigns("compromise of SolarWinds Orion software updates", top_k=3)
 
@@ -476,7 +476,8 @@ ATT&CKのデータはExcel版から公式STIX版に移行しました。内容�
 
 ```bash
 uv sync --all-groups
-uv run ruff check
+uv run ruff check --fix
+uv run ruff format
 uv run ty check
 uv run pytest -m "not integration" -v
 ```

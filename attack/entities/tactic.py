@@ -26,7 +26,7 @@ class AttackTactic(Renderable):
         self.shortname: str | None = shortname  # STIXのx_mitre_shortname (例: "initial-access")
         self.stix_id: str | None = stix_id
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "tactic",
             "id": self.id,

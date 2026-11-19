@@ -92,7 +92,7 @@ class Atlas:
             Falseの場合は何も出力しない(ロガー名 "atlas" で制御可能)
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         *,
         version: str | None = None,
@@ -224,8 +224,7 @@ class Atlas:
                 description=ed.get("description", ""),
                 entity_type=ed["entity-type"],
                 associated_entities=[
-                    AtlasAssociatedEntity(name=str(a["name"]), description=a.get("description"))
-                    for a in ed.get("associated-entities") or []
+                    AtlasAssociatedEntity(name=str(a["name"]), description=a.get("description")) for a in ed.get("associated-entities") or []
                 ],
                 attack_reference=self._make_attack_reference(ed.get("attack-reference")),
                 uuid=ed.get("uuid"),
@@ -330,7 +329,7 @@ class Atlas:
         self.__apply_technique_hierarchy()
 
         for cs in self.casestudy_list:
-            cs.procedure.sort(key=lambda s: (s.step_id or ""))
+            cs.procedure.sort(key=lambda s: s.step_id or "")
 
     def __apply_achieves_relationship(self, rel: AtlasRelationship) -> None:
         """achieves (Technique → Tactic) を反映する。"""
@@ -464,9 +463,7 @@ class Atlas:
             "technique": {t.id: f"{t.name}\n\n{t.description}" for t in self.technique_list},
             "mitigation": {m.id: f"{m.name}\n\n{m.description}" for m in self.mitigation_list},
             "case_study": {cs.id: self.__case_study_document(cs) for cs in self.casestudy_list},
-            "case_study_step": {
-                step.id: f"{step.technique.name}\n\n{step.description}" for cs in self.casestudy_list for step in cs.procedure
-            },
+            "case_study_step": {step.id: f"{step.technique.name}\n\n{step.description}" for cs in self.casestudy_list for step in cs.procedure},
         }
         self._search_names: dict[SearchKind, dict[str, str]] = {
             "technique": {t.id: t.name for t in self.technique_list},
@@ -474,9 +471,7 @@ class Atlas:
             "case_study": {cs.id: cs.name for cs in self.casestudy_list},
             "case_study_step": {},
         }
-        self._lexical_indexes: dict[SearchKind, LexicalIndex] = {
-            kind: LexicalIndex(documents) for kind, documents in self._search_documents.items()
-        }
+        self._lexical_indexes: dict[SearchKind, LexicalIndex] = {kind: LexicalIndex(documents) for kind, documents in self._search_documents.items()}
 
     @staticmethod
     def __case_study_document(cs: AtlasCaseStudy) -> str:
@@ -631,7 +626,7 @@ class Atlas:
         """
         return self.__get_or_raise(self._software_by_id, software_id)
 
-    def search_relevant_techniques(  # noqa: PLR0913
+    def search_relevant_techniques(
         self,
         query: str,
         top_k: int,

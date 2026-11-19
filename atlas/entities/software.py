@@ -47,7 +47,7 @@ class AtlasSoftware(Renderable):
         casestudy_list (list[AtlasCaseStudy]): このソフトウェアが使用されたケーススタディ (CaseStudy → Software uses の逆引き)
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         software_id: str,
         name: str,
@@ -77,7 +77,7 @@ class AtlasSoftware(Renderable):
         self.entity_list: list[AtlasEntity] = []
         self.casestudy_list: list[AtlasCaseStudy] = []
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "software",
             "id": self.id,

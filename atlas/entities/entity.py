@@ -63,7 +63,7 @@ class AtlasEntity(Renderable):
         reported_casestudy_list (list[AtlasCaseStudy]): このエンティティが報告したケーススタディ (reported-by の逆引き)
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         entity_id: str,
         name: str,
@@ -92,7 +92,7 @@ class AtlasEntity(Renderable):
         self.casestudy_list: list[AtlasCaseStudy] = []
         self.reported_casestudy_list: list[AtlasCaseStudy] = []
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "entity",
             "id": self.id,

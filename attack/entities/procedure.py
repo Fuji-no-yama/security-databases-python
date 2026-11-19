@@ -60,7 +60,7 @@ class AttackProcedure(Renderable):
         """プロシージャID (original_id と同じ。例: "P0001")。バージョンごとに採番されるため永続的なIDではない。"""
         return self.original_id
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "procedure",
             "id": self.original_id,
