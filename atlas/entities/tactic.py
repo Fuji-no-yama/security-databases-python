@@ -1,8 +1,11 @@
+from typing import Any
+
+from ._render import AtlasRenderable, body_lines, label, references_list, refs, related_lines
 from .reference import AtlasReference
 from .technique import AtlasTechnique
 
 
-class AtlasTactic:
+class AtlasTactic(AtlasRenderable):
     """
     ATLASのタクティックを表すクラス。
 
@@ -31,3 +34,19 @@ class AtlasTactic:
         self.technique_list: list[AtlasTechnique] = tec_lis
         self.uuid: str | None = uuid
         self.references: list[AtlasReference] | None = references
+
+    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+        return {
+            "type": "tactic",
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "techniques": refs(self.technique_list),
+            "references": references_list(self.references),
+        }
+
+    def _text_lines(self, max_related: int | None) -> list[str]:
+        lines = [f"## {label(self)}", "Type: tactic"]
+        lines += body_lines(self.description)
+        lines += related_lines("Techniques", [label(t) for t in self.technique_list], max_related)
+        return lines

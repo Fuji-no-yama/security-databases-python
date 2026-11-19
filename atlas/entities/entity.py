@@ -1,6 +1,17 @@
 import re
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
+from ._render import (
+    AtlasRenderable,
+    attack_reference_dict,
+    body_lines,
+    clean_text,
+    label,
+    meta_line,
+    references_list,
+    refs,
+    related_lines,
+)
 from .attack_reference import AtlasAttackReference
 from .reference import AtlasReference
 
@@ -26,7 +37,7 @@ class AtlasAssociatedEntity:
         self.description: str | None = description
 
 
-class AtlasEntity:
+class AtlasEntity(AtlasRenderable):
     """
     ATLASのエンティティ(format-version 6.1.0で追加)を表すクラス。
 
@@ -48,6 +59,7 @@ class AtlasEntity:
         technique_list (list[AtlasTechnique]): このエンティティが使用するテクニック (uses)
         software_list (list[AtlasSoftware]): このエンティティが使用するソフトウェア (uses)
         casestudy_list (list[AtlasCaseStudy]): このエンティティに帰属するケーススタディ (attributed-to の逆引き)
+        reported_casestudy_list (list[AtlasCaseStudy]): このエンティティが報告したケーススタディ (reported-by の逆引き)
     """
 
     def __init__(  # noqa: PLR0913
@@ -77,3 +89,37 @@ class AtlasEntity:
         self.technique_list: list[AtlasTechnique] = []
         self.software_list: list[AtlasSoftware] = []
         self.casestudy_list: list[AtlasCaseStudy] = []
+        self.reported_casestudy_list: list[AtlasCaseStudy] = []
+
+    def to_dict(self) -> dict[str, Any]:  # noqa: D102
+        return {
+            "type": "entity",
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "entity_type": self.entity_type,
+            "associated_entities": [{"name": a.name, "description": a.description} for a in self.associated_entities],
+            "techniques": refs(self.technique_list),
+            "software": refs(self.software_list),
+            "case_studies": refs(self.casestudy_list),
+            "reported_case_studies": refs(self.reported_casestudy_list),
+            "attack_reference": attack_reference_dict(self.attack_reference),
+            "references": references_list(self.references),
+        }
+
+    def _text_lines(self, max_related: int | None) -> list[str]:
+        meta = meta_line(
+            f"Type: entity ({self.entity_type})",
+            f"ATT&CK: {self.attack_reference.id}" if self.attack_reference else None,
+        )
+        lines = [f"## {label(self)}", meta]
+        if self.associated_entities:
+            lines.append(f"Also known as: {', '.join(a.name for a in self.associated_entities)}")
+        lines += body_lines(self.description)
+        lines += related_lines("Attributed case studies", [label(c) for c in self.casestudy_list], max_related)
+        lines += related_lines("Reported case studies", [label(c) for c in self.reported_casestudy_list], max_related)
+        lines += related_lines("Uses software", [label(s) for s in self.software_list], max_related)
+        lines += related_lines("Uses techniques", [label(t) for t in self.technique_list], max_related)
+        associated = [f"{a.name}: {clean_text(a.description)}" for a in self.associated_entities if clean_text(a.description)]
+        lines += related_lines("Associated entity notes", associated, max_related)
+        return lines
