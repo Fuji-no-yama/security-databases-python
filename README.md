@@ -57,7 +57,7 @@ attack = Attack(
 )
 ```
 
-`embedding_provider`は省略できるため、従来の `Atlas()` と `Attack()` も `OPENAI_API_KEY` が設定されていればOpenAIを使用します。APIキーがない場合、通常のデータ取得は利用できますが、セマンティック検索は無効になります。
+`embedding_provider`は省略できるため、従来の `Atlas()` と `Attack()` も `OPENAI_API_KEY` が設定されていればOpenAIを使用します。APIキーがない場合も通常のデータ取得は利用できます。検索は、ATLASではキーワード検索のみで動作し、ATT&CKでは無効になります。
 
 ### Azure OpenAI
 
@@ -87,7 +87,10 @@ Azure OpenAIでは `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` がAPI呼び出し時の�
 
 ### ベクトルDB
 
-初回実行時はChroma DBを自動作成し、進捗を表示します。再作成する場合は `initialize_vector=True` を指定します。
+初回実行時はChroma DBを自動作成します。
+
+- **ATLAS**: 各コレクションに作成時のインデックス形式とデータのハッシュを記録し、ライブラリの更新でベクトル化の方法やデータが変わった場合は、次回の初期化時に該当するコレクションだけを自動で再構築します。通常は何も出力しません。進捗を表示したい場合は `verbose=True` を指定します(出力先は標準エラー出力)。強制的に再構築する場合は `initialize_vector=True` を指定します。
+- **ATT&CK**: 初回作成時に進捗を表示します。再作成する場合は `initialize_vector=True` を指定します。
 
 DBはデータバージョンに加え、provider・モデルまたはAzure deployment・endpointごとに分離されます。ディレクトリ名末尾には設定を識別するハッシュが付きます。
 
@@ -126,8 +129,12 @@ atlas.tactic_list
 atlas.technique_list
 atlas.mitigation_list
 atlas.casestudy_list
+atlas.entity_list      # 2026.10以降
+atlas.software_list    # 2026.10以降
 atlas.relationships
 ```
+
+ATLASは標準では標準出力・標準エラー出力に何も表示しません。ベクトルDB構築などの進捗を確認したい場合は `Atlas(verbose=True)` を指定します。表示は標準エラー出力に行われるため、標準入出力で通信するMCPサーバーなどに組み込んでも通信を妨げません。ログはロガー名 `atlas` で個別に制御することもできます。
 
 ### IDによる取得
 
@@ -147,9 +154,41 @@ print(case_study_step.description)
 
 IDが存在しない場合、各取得メソッドは `ValueError` を送出します。
 
+### エンティティとソフトウェア (2026.10以降)
+
+format-version 6.1.0 (リリース2026.10) から、活動主体を表すエンティティ (`AML.E####`) と、ツール・マルウェアを表すソフトウェア (`AML.S####`) が追加されました。
+
+```python
+atlas = Atlas(version="2026.10")
+
+case_study = atlas.get_case_study_by_id("AML.CS0044")
+for attribution in case_study.attributions:          # 帰属先と活動目的
+    print(attribution.entity.name, attribution.activity_purpose)  # APT28 Adversarial Operation
+print([e.name for e in case_study.reported_by])        # 報告者エンティティ
+print([s.name for s in case_study.software_list])      # 使用されたソフトウェア
+print(case_study.start_date, case_study.start_date_granularity, case_study.end_date)
+
+entity = atlas.get_entity_by_id("AML.E0018")
+print(entity.entity_type, entity.attack_reference.id)  # Activity Cluster G0007
+print([s.name for s in entity.software_list])          # LAMEHUG
+
+software = atlas.get_software_by_id("AML.S0015")
+print(software.aliases)                                # ['PROMPTSTEAL']
+print([t.id for t in software.technique_list])         # 実装するテクニック
+
+technique = atlas.get_technique_by_id("AML.T0102")
+print([s.name for s in technique.software_list])       # このテクニックを実装するソフトウェア
+```
+
+ライブラリはデータに存在する値のみを返し、リリース間の差異を推測で補完しません。
+
+- 2026.09以前のリリースでは `entity_list`・`software_list`・`attributions`・`reported_by`・`software_list` などは空です。
+- 6.1.0でケーススタディの `actor` は任意項目になり、多くのケーススタディで帰属先は `attributions` に移りました。データに無い場合 `actor` は空文字列です。
+- ケーススタディの日付は6.1.0で `date` から `start-date` / `end-date` に名称変更されたため、旧リリースの `date` は `start_date` として読み込みます。旧リリースの `end_date` は常に `None` です。
+
 ### Relationships
 
-v6データのrelationshipは `get_relationships()` で起点、対象、種別を絞り込めます。種別は `achieves`、`specializes`、`mitigates`、`employs`、`sequences` です。
+v6データのrelationshipは `get_relationships()` で起点、対象、種別を絞り込めます。種別は `achieves`、`specializes`、`mitigates`、`employs`、`sequences` と、6.1.0で追加された `attributed-to`、`reported-by`、`uses`、`implements` です。`attributed-to` などでは `activity_purpose` に活動目的が入ります。
 
 ```python
 relationships = atlas.get_relationships(
@@ -161,7 +200,9 @@ for relationship in relationships:
     print(relationship.source_id, relationship.target_id)
 ```
 
-### セマンティック検索
+### 検索
+
+テクニック・緩和策・ケーススタディ・ケーススタディのステップを検索できます。Embedding providerが設定されている場合はベクトル検索(名前と説明文のcos類似度)、未設定の場合はキーワード検索(BM25)で順位を付け、結果はスコアの高い順に返します。
 
 ```python
 from atlas import Atlas
@@ -173,16 +214,69 @@ atlas = Atlas(
 )
 
 techniques = atlas.search_relevant_techniques(
-    query="LLMとRAGに関連する攻撃手法",
+    query="malware that uses an LLM to generate commands",
     top_k=5,
-    filter="both",  # parent / child / both
+    filter="both",            # parent / child / both
+    tactic_id=None,           # 例: "AML.TA0002"
+    platform=None,            # 例: "Agentic AI"
+    maturity=None,            # "Feasible" / "Demonstrated" / "Realized"
 )
+mitigations = atlas.search_relevant_mitigations("prompt injection defenses", top_k=5)
+case_studies = atlas.search_relevant_case_studies("attack by Russian state-sponsored group", top_k=3, casestudy_type="Incident")
+steps = atlas.search_relevant_case_study_steps("uploading a malicious model to a public model hub", top_k=3)
 
-steps = atlas.search_relevant_case_study_steps(
-    query="RAGを利用したシステムへの攻撃",
-    top_k=3,
-)
+for result in techniques:
+    print(result.score, result.item.id, result.item.name)  # result.item は AtlasTechnique
 ```
+
+検索結果は `AtlasSearchResult` のリストで、`item` に検索されたオブジェクト、`score` に0〜1の関連度が入ります。
+
+- IDや名前と完全一致する場合(例: `"AML.T0051"`、`"LLM Prompt Injection"`)は、その項目がスコア1.0で最上位になります。それ以外のスコアは1.0未満です。
+- ケーススタディは、名前・対象・帰属先エンティティ・使用ソフトウェア・概要が検索対象です。
+- Embedding providerが未設定の場合はキーワード検索のみで動作します(`atlas.vector_search_enabled` が `False`)。
+
+#### 検索精度に関する注意
+
+- **英語のクエリを推奨します。** ATLASのデータは英語のため、日本語のクエリでは類似度が全体に低くなり、順位も不安定になります。例えば `text-embedding-3-small` で同じ内容を検索した場合、正解のテクニック (AML.T0102) のスコアは英語で約0.69、日本語で約0.46でした。日本語の「ロシアの国家支援グループによる攻撃」では正解のケーススタディが3位でしたが、英語の "attack by Russian state-sponsored group" では1位でした。AIエージェントのツールとして使う場合は、ツールの説明で英語での検索を指示すると効果的です。
+- **キーワード検索のみの場合は精度が限られます。** 語形の違い(例: `LLM` と `LLMs`)を区別し、同義語も考慮しないため、自然文のクエリでは関連する項目を取りこぼすことがあります。可能な限りEmbedding providerを設定してください。
+- **ベクトル検索とキーワード検索は混ぜていません。** 両方のスコアを合算する方式も試しましたが、ベクトル検索の類似度は候補間の差が小さく(0.01〜0.02程度)、"llm" などの一般的な語のキーワード一致で正しい順位が入れ替わることを確認したため採用していません。
+
+### テキスト・辞書への変換 (AIエージェント向け)
+
+検索結果と、`get_*_by_id` で取得した各オブジェクトは `to_text()` と `to_dict()` を持ちます。AIエージェントのツールとして使う場合、関連情報を含めた文字列をそのまま返せます。
+
+```python
+results = atlas.search_relevant_techniques("AML.T0102", top_k=1)
+print(results[0].to_text())
+
+atlas.get_case_study_by_id("AML.CS0044").to_text()
+atlas.get_entity_by_id("AML.E0018").to_dict()   # JSONに変換可能な辞書
+```
+
+```text
+## AML.T0102 Generate Malicious Commands  (score: 1.00)
+Type: technique | Maturity: Realized | Platforms: Enterprise
+Tactics: AML.TA0001 AI Attack Adaptation
+
+Adversaries may use large language models (LLMs) to dynamically generate malicious commands ...
+
+Mitigated by (2):
+- AML.M0020 Generative AI Guardrails
+- AML.M0022 Generative AI Model Alignment
+
+Implemented by software (3):
+- AML.S0015 LAMEHUG (Malware)
+- AML.S0017 HONESTCUE (Malware)
+- AML.S0018 Xanthorox (Tool)
+
+Observed in case studies (4):
+- AML.CS0044 LAMEHUG: Malware Leveraging Dynamic AI-Generated Commands
+- ...
+```
+
+- 関連オブジェクトは1段階だけ「IDと名前」で展開します。詳細が必要な場合は、そのIDで再度 `get_*_by_id` を呼び出します。
+- `to_text(max_related=10)` のように指定すると、関連オブジェクトの一覧ごとの表示件数を制限できます。
+- `to_text()` ではマークダウンリンクと引用マーカー (`[[...]]`) を除去します。`to_dict()` は各属性の値をそのまま返します。
 
 ## MITRE ATT&CK
 
@@ -282,6 +376,15 @@ procedures = attack.search_relevant_procedures(
 | `Atlas.search_relevant_casestudy` | `Atlas.search_relevant_case_study_steps` |
 | `Attack.get_relevant_technique` | `Attack.search_relevant_techniques` |
 | `Attack.get_relevant_procedure` | `Attack.search_relevant_procedures` |
+
+ATLASの `search_relevant_techniques` と `search_relevant_case_study_steps` は、オブジェクトのリストではなく `AtlasSearchResult` のリストを返すように変更されました。従来のオブジェクトは `result.item` で取得できます。
+
+```python
+# 変更前
+techniques = atlas.search_relevant_techniques("...", top_k=5)
+# 変更後
+techniques = [r.item for r in atlas.search_relevant_techniques("...", top_k=5)]
+```
 
 ## 開発
 

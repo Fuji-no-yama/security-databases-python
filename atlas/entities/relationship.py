@@ -8,7 +8,14 @@ RelationshipType = Literal[
     "mitigates",
     "employs",
     "sequences",
+    # 以下は format-version 6.1.0 で追加
+    "attributed-to",
+    "reported-by",
+    "uses",
+    "implements",
 ]
+
+ActivityPurpose = Literal["Adversarial Operation", "Security Evaluation", "Unintended Consequence"]
 
 
 class AtlasRelationship:
@@ -18,11 +25,18 @@ class AtlasRelationship:
     v6.0.0時点では relationship 自体は uuid や references を持たないが、将来的な
     v6.x で first-class 化された場合に備えて Optional フィールドとして受け皿を用意する。
 
+    6.1.0で追加された種別の向き:
+        attributed-to: CaseStudy → Entity
+        reported-by: CaseStudy → Entity
+        uses: CaseStudy → Software / Entity → Software / Entity → Technique
+        implements: Software → Technique
+
     Args:
         source_id (str): 起点エンティティID (例: "AML.CS0000")
         target_id (str): 対象エンティティID (例: "AML.T0000.001")
-        type (RelationshipType): 関係種別 (achieves / specializes / mitigates / employs / sequences)
-        description (str | None): 関係固有の説明 (mitigates / employs のみ)
+        type (RelationshipType): 関係種別
+        description (str | None): 関係固有の説明 (mitigates / employs / uses / implements など)
+        activity_purpose (ActivityPurpose | None): 活動の目的 (attributed-to と一部の uses)
         tactic_id (str | None): employs におけるステップのタクティックID
         step_id (str | None): employs におけるステップID (例: "S00")
         leads_to (list[str] | None): employs における次に遷移し得るstep-id一覧
@@ -39,6 +53,7 @@ class AtlasRelationship:
         type: RelationshipType,  # noqa: A002
         *,
         description: str | None = None,
+        activity_purpose: ActivityPurpose | None = None,
         tactic_id: str | None = None,
         step_id: str | None = None,
         leads_to: list[str] | None = None,
@@ -51,6 +66,7 @@ class AtlasRelationship:
         self.target_id: str = target_id
         self.type: RelationshipType = type
         self.description: str | None = description
+        self.activity_purpose: ActivityPurpose | None = activity_purpose
         self.tactic_id: str | None = tactic_id
         self.step_id: str | None = step_id
         self.leads_to: list[str] | None = leads_to

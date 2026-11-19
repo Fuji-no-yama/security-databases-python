@@ -3,6 +3,7 @@
 tmp/*
 .DS_Store
 .env.local
+.env.dev
 data/artifact/chromadb/*
 AGENTS.md
 CLAUDE.md
