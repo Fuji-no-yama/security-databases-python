@@ -3,11 +3,13 @@ from typing import TYPE_CHECKING
 from .reference import AttackExternalReference, AttackInternalReference
 
 if TYPE_CHECKING:
+    from .campaign import AttackCampaign
+    from .group import AttackGroup
     from .procedure import AttackProcedure
 
 
 class AttackSoftware:
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         name: str,
         software_id: str,
@@ -15,6 +17,12 @@ class AttackSoftware:
         domain: str,
         procedure_list: list["AttackProcedure"],
         reference_list: list[AttackExternalReference | AttackInternalReference],
+        *,
+        stix_id: str | None = None,
+        aliases: list[str] | None = None,
+        url: str | None = None,
+        software_type: str | None = None,
+        platforms: list[str] | None = None,
     ) -> None:
         self.name: str = name
         self.id: str = software_id
@@ -22,6 +30,13 @@ class AttackSoftware:
         self.description: str = description  # リンク系統を清掃する
         self.procedure_list: list[AttackProcedure] = procedure_list
         self.reference_list: list[AttackExternalReference | AttackInternalReference] = reference_list
+        self.stix_id: str | None = stix_id
+        self.aliases: list[str] = aliases or []
+        self.url: str | None = url
+        self.software_type: str | None = software_type  # "malware" または "tool"
+        self.platforms: list[str] = platforms or []
+        self.group_list: list[AttackGroup] = []  # このソフトウェアを使用するグループ (uses の逆引き)
+        self.campaign_list: list[AttackCampaign] = []  # このソフトウェアが使用されたキャンペーン (uses の逆引き)
 
     def get_description_include_references(self) -> str:
         """参考資料を含む説明文を取得する"""

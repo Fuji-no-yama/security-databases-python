@@ -13,6 +13,8 @@ class AttackProcedure:
         description: str,
         domain: str,
         reference_list: list[AttackExternalReference | AttackInternalReference],
+        *,
+        stix_id: str | None = None,
     ) -> None:
         self.original_id: str = original_id
         self.parent_id: str = parent_id
@@ -22,6 +24,7 @@ class AttackProcedure:
         self.domain: str = domain
         self.description: str = description  # リンク系統を清掃する
         self.reference_list: list[AttackExternalReference | AttackInternalReference] = reference_list
+        self.stix_id: str | None = stix_id  # 元になったuses relationshipのSTIX ID
 
     def get_description_include_references(self) -> str:
         """参考資料を含む説明文を取得する"""

@@ -3,10 +3,9 @@ import shutil
 from contextlib import suppress
 from importlib.resources import files
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import chromadb
-import pandas as pd
 from chromadb.api.models.Collection import Collection
 from chromadb.errors import NotFoundError
 from platformdirs import user_data_dir
@@ -27,10 +26,32 @@ from attack.entities import (
     AttackGroup,
     AttackInternalReference,
     AttackProcedure,
+    AttackRelationship,
     AttackSoftware,
     AttackTactic,
     AttackTechnique,
 )
+from attack.stix_bundle import StixBundle, attack_id_of, attack_url_of
+
+if TYPE_CHECKING:
+    from importlib.abc import Traversable
+
+# ドメインごとのkill chain名 (テクニックとタクティックの対応付けに使う)
+_KILL_CHAIN_NAMES: dict[str, str] = {
+    "enterprise": "mitre-attack",
+    "mobile": "mitre-mobile-attack",
+    "ics": "mitre-ics-attack",
+}
+# ベクトルDBの保存先ディレクトリ名。Excel版とSTIX版でプロシージャID (P0001...) の採番順が異なるため、
+# Excel版で作成した "chroma" 配下のDBを誤って使わないよう、STIX版では別ディレクトリに作成する。
+_VECTOR_DB_DIR = "chroma-stix"
+# プロシージャ(uses relationship)の起点になり得るSTIX typeと、AttackProcedure.parent_type の対応
+_PROCEDURE_PARENT_TYPES: dict[str, str] = {
+    "campaign": "campaign",
+    "malware": "software",
+    "tool": "software",
+    "intrusion-set": "group",
+}
 
 
 class Attack:
@@ -66,17 +87,21 @@ class Attack:
         version_input = version if version is not None else version_resolver.latest_version()
         resolved_version, data_path = version_resolver.resolve(version_input)
         self.release = resolved_version
-        self.version = f"v{resolved_version}"  # ディレクトリ名はv17.1のような形式であるため、バージョンをv{version}の形式に変換
-        self.data_dir_path = files("attack.data").joinpath(data_path)  # パッケージ内のdataディレクトリ
+        self.version = f"v{resolved_version}"
+        self.data_file: Traversable = files("attack.data").joinpath(data_path).joinpath(f"{domain}-attack-{resolved_version}.json.gz")
         self.user_data_dir_path: Path = Path(user_data_dir("attack")) / "releases" / resolved_version / domain
         self.user_data_dir_path.mkdir(parents=True, exist_ok=True)  # 念の為作成
+
+        self._bundle = StixBundle(self.data_file)
         self.external_reference_list: list[AttackExternalReference] = self.__setup_external_reference_list()
         self.tactic_list: list[AttackTactic] = self.__setup_tactic_list()
+        self.technique_list: list[AttackTechnique] = self.__setup_technique_list()
         self.mitigation_list: list[AttackAbstractMitigation] = self.__setup_mitigation_list()
         self.campaign_list: list[AttackCampaign] = self.__setup_campaign_list()
-        self.group_list: list[AttackGroup] = self.__setup_group_list()
         self.software_list: list[AttackSoftware] = self.__setup_software_list()
-        self.technique_list: list[AttackTechnique] = self.__setup_technique_list()
+        self.group_list: list[AttackGroup] = self.__setup_group_list()
+        self.relationships: list[AttackRelationship] = self.__setup_relationships()
+        self.__link_entities()
 
         self.technique_chroma_collection: Collection | None = None
         self.procedure_chroma_collection: Collection | None = None
@@ -84,7 +109,7 @@ class Attack:
         embedding_configuration = resolve_embedding_configuration(embedding_provider, emb_model)
         if embedding_configuration is not None:
             self._embedding_function = create_embedding_function(embedding_configuration)
-            self.chroma_path = self.user_data_dir_path / "chroma" / embedding_configuration.cache_key
+            self.chroma_path = self.user_data_dir_path / _VECTOR_DB_DIR / embedding_configuration.cache_key
             has_vector_db = self.chroma_path.is_dir()
             if not has_vector_db:
                 print("ベクトルDBの設定がありません。初期化し作成します...")
@@ -96,237 +121,267 @@ class Attack:
             self.procedure_chroma_collection = self.__get_procedure_chroma_collection()
 
     def __setup_external_reference_list(self) -> list[AttackExternalReference]:
-        mitigation_df: pd.DataFrame = pd.read_excel(
-            self.data_dir_path / f"{self.domain}-attack-{self.version}-mitigations.xlsx",
-            sheet_name="citations",
-        )
-        technique_df: pd.DataFrame = pd.read_excel(
-            self.data_dir_path / f"{self.domain}-attack-{self.version}-techniques.xlsx",
-            sheet_name="citations",
-        )
-        campaign_df: pd.DataFrame = pd.read_excel(
-            self.data_dir_path / f"{self.domain}-attack-{self.version}-campaigns.xlsx",
-            sheet_name="citations",
-        )
-        group_df: pd.DataFrame = pd.read_excel(
-            self.data_dir_path / f"{self.domain}-attack-{self.version}-groups.xlsx",
-            sheet_name="citations",
-        )
-        software_df: pd.DataFrame = pd.read_excel(
-            self.data_dir_path / f"{self.domain}-attack-{self.version}-software.xlsx",
-            sheet_name="citations",
-        )
-        reference_df: pd.DataFrame = (
-            pd.concat([mitigation_df, technique_df, campaign_df, group_df, software_df]).drop_duplicates().reset_index(drop=True)
-        )
-        ret_list: list[AttackExternalReference] = []
-        for i, (_, row) in enumerate(reference_df.iterrows()):
-            ref = AttackExternalReference(
+        return [
+            AttackExternalReference(
                 reference_id=i,
-                name=row["reference"],
-                url=row["url"],
-                description=row["citation"],
+                name=name,
+                url=str(ref.get("url", "")),
+                description=str(ref.get("description", "")),
             )
-            ret_list.append(ref)
-        return ret_list
+            for i, (name, ref) in enumerate(self._bundle.citations.items())
+        ]
 
     def __setup_tactic_list(self) -> list[AttackTactic]:
-        tactic_df: pd.DataFrame = pd.read_excel(
-            self.data_dir_path / f"{self.domain}-attack-{self.version}-tactics.xlsx",
-            sheet_name="tactics",
-        )
-        tactic_list: list[AttackTactic] = []
-        for _, row in tactic_df.iterrows():
-            tactic_id: str = row["ID"]
-            name: str = row["name"]
-            description: str = row["description"]
-            tactic = AttackTactic(
-                tactic_id=tactic_id,
-                name=name,
+        """タクティックを作成する。マトリクスに定義された順 (攻撃の段階順) に並べる。"""
+        order: list[str] = [ref for matrix in self._bundle.objects_by_type.get("x-mitre-matrix", []) for ref in matrix.get("tactic_refs", [])]
+        tactics = self._bundle.of_type("x-mitre-tactic")
+        tactics.sort(key=lambda o: order.index(o["id"]) if o["id"] in order else len(order))
+        return [
+            AttackTactic(
+                tactic_id=attack_id_of(obj) or "",
+                name=obj["name"],
                 domain=self.domain,
-                description=description,
+                description=obj.get("description", ""),
                 technique_list=[],
+                shortname=obj.get("x_mitre_shortname"),
+                stix_id=obj["id"],
             )
-            tactic_list.append(tactic)
-        return tactic_list
-
-    def __setup_mitigation_list(self) -> list[AttackAbstractMitigation]:
-        abstract_mitigation_df: pd.DataFrame = pd.read_excel(
-            self.data_dir_path / f"{self.domain}-attack-{self.version}-mitigations.xlsx",
-            sheet_name="mitigations",
-        )
-        concrete_mitigation_df: pd.DataFrame = pd.read_excel(
-            self.data_dir_path / f"{self.domain}-attack-{self.version}-mitigations.xlsx",
-            sheet_name="techniques addressed",
-        )
-        mitigation_list: list[AttackAbstractMitigation] = []
-        for _, row in abstract_mitigation_df.iterrows():
-            mitigation_id: str = row["ID"]
-            description: str = row["description"]
-            concrete_mitigation_list: list[AttackConcreteMitigation] = []
-            for _, conc_mit_row in concrete_mitigation_df[concrete_mitigation_df["source ID"] == mitigation_id].iterrows():
-                conc_mit = AttackConcreteMitigation(
-                    abstract_mitigation_id=mitigation_id,
-                    abstract_mitigation_name=row["name"],
-                    technique_id=conc_mit_row["target ID"],
-                    description=self.__clean_description(conc_mit_row["mapping description"]),
-                    domain=self.domain,
-                    reference_list=self.__create_reference_list(conc_mit_row["mapping description"]),
-                )
-                concrete_mitigation_list.append(conc_mit)
-            mitigation = AttackAbstractMitigation(
-                name=row["name"],
-                mitigation_id=mitigation_id,
-                description=self.__clean_description(description),
-                domain=self.domain,
-                concrete_mitigation_list=concrete_mitigation_list,
-                reference_list=self.__create_reference_list(description),
-            )
-            mitigation_list.append(mitigation)
-        return mitigation_list
-
-    def __setup_campaign_list(self) -> list[AttackCampaign]:
-        campaign_df: pd.DataFrame = pd.read_excel(
-            self.data_dir_path / f"{self.domain}-attack-{self.version}-campaigns.xlsx",
-            sheet_name="campaigns",
-        )
-        procedure_df: pd.DataFrame = pd.read_excel(
-            self.data_dir_path / f"{self.domain}-attack-{self.version}-campaigns.xlsx",
-            sheet_name="techniques used",
-        )
-        campaign_list: list[AttackCampaign] = []
-        for _, row in campaign_df.iterrows():
-            campaign_id = row["ID"]
-            associated_procedure_df = procedure_df[procedure_df["source ID"] == campaign_id]
-            procedure_list: list[AttackProcedure] = []
-            for _, proc_row in associated_procedure_df.iterrows():
-                procedure = AttackProcedure(
-                    original_id=f"P{str(self.procedure_count + 1).zfill(4)}",
-                    parent_id=campaign_id,
-                    parent_name=row["name"],
-                    parent_type="campaign",
-                    technique_id=proc_row["target ID"],
-                    description=self.__clean_description(proc_row["mapping description"]),
-                    domain=self.domain,
-                    reference_list=self.__create_reference_list(proc_row["mapping description"]),
-                )
-                procedure_list.append(procedure)
-                self.procedure_count += 1
-            campaign = AttackCampaign(
-                name=row["name"],
-                campaign_id=campaign_id,
-                description=self.__clean_description(row["description"]),
-                domain=self.domain,
-                procedure_list=procedure_list,
-                reference_list=self.__create_reference_list(row["description"]),
-            )
-            campaign_list.append(campaign)
-        return campaign_list
-
-    def __setup_software_list(self) -> list[AttackSoftware]:
-        software_df: pd.DataFrame = pd.read_excel(
-            self.data_dir_path / f"{self.domain}-attack-{self.version}-software.xlsx",
-            sheet_name="software",
-        )
-        procedure_df: pd.DataFrame = pd.read_excel(
-            self.data_dir_path / f"{self.domain}-attack-{self.version}-software.xlsx",
-            sheet_name="techniques used",
-        )
-        software_list: list[AttackSoftware] = []
-        for _, row in software_df.iterrows():
-            software_id = row["ID"]
-            associated_procedure_df = procedure_df[procedure_df["source ID"] == software_id]
-            procedure_list: list[AttackProcedure] = []
-            for _, proc_row in associated_procedure_df.iterrows():
-                procedure = AttackProcedure(
-                    original_id=f"P{str(self.procedure_count + 1).zfill(4)}",
-                    parent_id=software_id,
-                    parent_name=row["name"],
-                    parent_type="software",
-                    technique_id=proc_row["target ID"],
-                    description=self.__clean_description(proc_row["mapping description"]),
-                    domain=self.domain,
-                    reference_list=self.__create_reference_list(proc_row["mapping description"]),
-                )
-                self.procedure_count += 1
-                procedure_list.append(procedure)
-            software = AttackSoftware(
-                name=row["name"],
-                software_id=software_id,
-                description=self.__clean_description(row["description"]),
-                domain=self.domain,
-                procedure_list=procedure_list,
-                reference_list=self.__create_reference_list(row["description"]),
-            )
-            software_list.append(software)
-        return software_list
-
-    def __setup_group_list(self) -> list[AttackGroup]:
-        group_df: pd.DataFrame = pd.read_excel(
-            self.data_dir_path / f"{self.domain}-attack-{self.version}-groups.xlsx",
-            sheet_name="groups",
-        )
-        procedure_df: pd.DataFrame = pd.read_excel(
-            self.data_dir_path / f"{self.domain}-attack-{self.version}-groups.xlsx",
-            sheet_name="techniques used",
-        )
-        group_list: list[AttackGroup] = []
-        for _, row in group_df.iterrows():
-            group_id = row["ID"]
-            associated_procedure_df = procedure_df[procedure_df["source ID"] == group_id]
-            procedure_list: list[AttackProcedure] = []
-            for _, proc_row in associated_procedure_df.iterrows():
-                procedure = AttackProcedure(
-                    original_id=f"P{str(self.procedure_count + 1).zfill(4)}",
-                    parent_id=group_id,
-                    parent_name=row["name"],
-                    parent_type="group",
-                    technique_id=proc_row["target ID"],
-                    description=self.__clean_description(proc_row["mapping description"]),
-                    domain=self.domain,
-                    reference_list=self.__create_reference_list(proc_row["mapping description"]),
-                )
-                self.procedure_count += 1
-                procedure_list.append(procedure)
-            group = AttackGroup(
-                name=row["name"],
-                group_id=group_id,
-                description=self.__clean_description(row["description"]),
-                domain=self.domain,
-                procedure_list=procedure_list,
-                reference_list=self.__create_reference_list(row["description"]),
-            )
-            group_list.append(group)
-        return group_list
+            for obj in tactics
+        ]
 
     def __setup_technique_list(self) -> list[AttackTechnique]:
-        tech_df: pd.DataFrame = pd.read_excel(
-            self.data_dir_path / f"{self.domain}-attack-{self.version}-techniques.xlsx",
-            sheet_name="techniques",
-        )
+        tactics_by_shortname: dict[str, AttackTactic] = {t.shortname: t for t in self.tactic_list if t.shortname}
+        kill_chain_name = _KILL_CHAIN_NAMES[self.domain]
         technique_list: list[AttackTechnique] = []
-        for _, row in tech_df.iterrows():
-            tec_id: str = row["ID"]
-            tactic_list: list[AttackTactic] = [self.get_tactic_by_name(n) for n in row["tactics"].split(", ")]
-            parent_id: str | None = (
-                re.findall(r"(T\d{4})\.\d{3}", tec_id)[0] if re.search(r"T\d{4}\.\d{3}", tec_id) else None
-            )  # サブテクニック(例: T1548.002)の場合、親ID(例: T1548)を抽出
+        for obj in self._bundle.of_type("attack-pattern"):
+            description: str = obj.get("description", "")
+            tactics = [
+                tactics_by_shortname[phase["phase_name"]]
+                for phase in obj.get("kill_chain_phases", [])
+                if phase.get("kill_chain_name") == kill_chain_name and phase.get("phase_name") in tactics_by_shortname
+            ]
             tec = AttackTechnique(
-                name=row["name"],
-                technique_id=tec_id,
-                description=self.__clean_description(row["description"]),
+                name=obj["name"],
+                technique_id=attack_id_of(obj) or "",
+                description=self.__clean_description(description),
                 domain=self.domain,
-                mitigation_list=self.get_concrete_mitigation_by_technique_id(technique_id=tec_id),
-                procedure_list=self.get_procedure_by_technique_id(technique_id=tec_id),
-                have_parent=bool(parent_id),
-                parent_id=parent_id,
-                tactics=tactic_list if row["ID"] != "" else [],
-                reference_list=self.__create_reference_list(row["description"]),
+                tactics=tactics,
+                reference_list=self.__create_reference_list(description),
+                stix_id=obj["id"],
+                platforms=obj.get("x_mitre_platforms"),
+                url=attack_url_of(obj),
             )
             technique_list.append(tec)
-            for tactic in tactic_list:  # タクティックにテクニックを追加
-                self.__add_technique_to_tactic(tactic.name, tec)
+            for tactic in tactics:
+                tactic.technique_list.append(tec)
         return technique_list
+
+    def __setup_mitigation_list(self) -> list[AttackAbstractMitigation]:
+        mitigates_by_source: dict[str, list[dict[str, Any]]] = {}
+        for rel in self._bundle.relationships_of("mitigates"):
+            mitigates_by_source.setdefault(rel["source_ref"], []).append(rel)
+        mitigation_list: list[AttackAbstractMitigation] = []
+        for obj in self._bundle.of_type("course-of-action"):
+            mitigation_id = attack_id_of(obj) or ""
+            description: str = obj.get("description", "")
+            concrete_mitigation_list: list[AttackConcreteMitigation] = []
+            for rel in sorted(mitigates_by_source.get(obj["id"], []), key=self.__target_attack_id):
+                technique_id = self.__target_attack_id(rel)
+                if not technique_id:
+                    continue
+                rel_description: str = rel.get("description", "")
+                concrete_mitigation_list.append(
+                    AttackConcreteMitigation(
+                        abstract_mitigation_id=mitigation_id,
+                        abstract_mitigation_name=obj["name"],
+                        technique_id=technique_id,
+                        description=self.__clean_description(rel_description),
+                        domain=self.domain,
+                        reference_list=self.__create_reference_list(rel_description),
+                        stix_id=rel["id"],
+                    ),
+                )
+            mitigation_list.append(
+                AttackAbstractMitigation(
+                    name=obj["name"],
+                    mitigation_id=mitigation_id,
+                    description=self.__clean_description(description),
+                    domain=self.domain,
+                    concrete_mitigation_list=concrete_mitigation_list,
+                    reference_list=self.__create_reference_list(description),
+                    stix_id=obj["id"],
+                ),
+            )
+        return mitigation_list
+
+    def __target_attack_id(self, rel: dict[str, Any]) -> str:
+        return attack_id_of(self._bundle.objects_by_id[rel["target_ref"]]) or ""
+
+    def __create_procedure_list(self, obj: dict[str, Any]) -> list[AttackProcedure]:
+        """1つのGroup / Software / Campaign が技術を使用する uses relationship からプロシージャを作成する。"""
+        if not hasattr(self, "_technique_uses_by_source"):
+            self._technique_uses_by_source: dict[str, list[dict[str, Any]]] = {}
+            for rel in self._bundle.relationships_of("uses"):
+                if rel["target_ref"].startswith("attack-pattern--"):
+                    self._technique_uses_by_source.setdefault(rel["source_ref"], []).append(rel)
+        parent_id = attack_id_of(obj) or ""
+        procedure_list: list[AttackProcedure] = []
+        for rel in sorted(self._technique_uses_by_source.get(obj["id"], []), key=self.__target_attack_id):
+            technique_id = self.__target_attack_id(rel)
+            if not technique_id:
+                continue
+            self.procedure_count += 1
+            rel_description: str = rel.get("description", "")
+            procedure_list.append(
+                AttackProcedure(
+                    original_id=f"P{str(self.procedure_count).zfill(4)}",
+                    parent_id=parent_id,
+                    parent_name=obj["name"],
+                    parent_type=_PROCEDURE_PARENT_TYPES[obj["type"]],
+                    technique_id=technique_id,
+                    description=self.__clean_description(rel_description),
+                    domain=self.domain,
+                    reference_list=self.__create_reference_list(rel_description),
+                    stix_id=rel["id"],
+                ),
+            )
+        return procedure_list
+
+    def __setup_campaign_list(self) -> list[AttackCampaign]:
+        return [
+            AttackCampaign(
+                name=obj["name"],
+                campaign_id=attack_id_of(obj) or "",
+                description=self.__clean_description(obj.get("description", "")),
+                domain=self.domain,
+                procedure_list=self.__create_procedure_list(obj),
+                reference_list=self.__create_reference_list(obj.get("description", "")),
+                stix_id=obj["id"],
+                aliases=[a for a in obj.get("aliases", []) if a != obj["name"]],
+                url=attack_url_of(obj),
+                first_seen=obj.get("first_seen"),
+                last_seen=obj.get("last_seen"),
+            )
+            for obj in self._bundle.of_type("campaign")
+        ]
+
+    def __setup_software_list(self) -> list[AttackSoftware]:
+        return [
+            AttackSoftware(
+                name=obj["name"],
+                software_id=attack_id_of(obj) or "",
+                description=self.__clean_description(obj.get("description", "")),
+                domain=self.domain,
+                procedure_list=self.__create_procedure_list(obj),
+                reference_list=self.__create_reference_list(obj.get("description", "")),
+                stix_id=obj["id"],
+                aliases=[a for a in obj.get("x_mitre_aliases", []) if a != obj["name"]],
+                url=attack_url_of(obj),
+                software_type=obj["type"],
+                platforms=obj.get("x_mitre_platforms"),
+            )
+            for obj in self._bundle.of_type("malware", "tool")
+        ]
+
+    def __setup_group_list(self) -> list[AttackGroup]:
+        return [
+            AttackGroup(
+                name=obj["name"],
+                group_id=attack_id_of(obj) or "",
+                description=self.__clean_description(obj.get("description", "")),
+                domain=self.domain,
+                procedure_list=self.__create_procedure_list(obj),
+                reference_list=self.__create_reference_list(obj.get("description", "")),
+                stix_id=obj["id"],
+                aliases=[a for a in obj.get("aliases", []) if a != obj["name"]],
+                url=attack_url_of(obj),
+            )
+            for obj in self._bundle.of_type("intrusion-set")
+        ]
+
+    def __setup_relationships(self) -> list[AttackRelationship]:
+        """両端がATT&CK IDを持つ有効なrelationshipを AttackRelationship に変換する。"""
+        relationships: list[AttackRelationship] = []
+        for rel in self._bundle.relationships:
+            source = self._bundle.objects_by_id[rel["source_ref"]]
+            target = self._bundle.objects_by_id[rel["target_ref"]]
+            source_id, target_id = attack_id_of(source), attack_id_of(target)
+            if source_id is None or target_id is None:
+                continue
+            relationships.append(
+                AttackRelationship(
+                    source_id=source_id,
+                    target_id=target_id,
+                    type=rel["relationship_type"],
+                    description=rel.get("description"),
+                    stix_id=rel["id"],
+                    source_type=source["type"],
+                    target_type=target["type"],
+                    raw=rel,
+                ),
+            )
+        return relationships
+
+    def __link_entities(self) -> None:
+        """relationshipをもとにオブジェクト間の参照 (サブテクニック、緩和策、プロシージャ等) を設定する。"""
+        techniques = {t.id: t for t in self.technique_list}
+        for mitigation in self.mitigation_list:
+            for concrete in mitigation.concrete_mitigation_list:
+                if concrete.technique_id in techniques:
+                    techniques[concrete.technique_id].mitigation_list.append(concrete)
+        for parent in [*self.campaign_list, *self.group_list, *self.software_list]:
+            for procedure in parent.procedure_list:
+                if procedure.technique_id in techniques:
+                    techniques[procedure.technique_id].procedure_list.append(procedure)
+        self.__link_relationship_references(techniques)
+
+    def __link_relationship_references(self, techniques: dict[str, AttackTechnique]) -> None:
+        """subtechnique-of / attributed-to / uses(→Software) をオブジェクト間の参照に反映する。"""
+        groups = {g.id: g for g in self.group_list}
+        software = {s.id: s for s in self.software_list}
+        campaigns = {c.id: c for c in self.campaign_list}
+        for rel in self.relationships:
+            if rel.type == "subtechnique-of" and rel.source_id in techniques and rel.target_id in techniques:
+                child, parent_tec = techniques[rel.source_id], techniques[rel.target_id]
+                child.have_parent, child.parent_id, child.parent = True, parent_tec.id, parent_tec
+                parent_tec.subtechnique_list.append(child)
+            elif rel.type == "attributed-to" and rel.source_id in campaigns and rel.target_id in groups:
+                campaigns[rel.source_id].group_list.append(groups[rel.target_id])
+                groups[rel.target_id].campaign_list.append(campaigns[rel.source_id])
+            elif rel.type == "uses" and rel.target_id in software:
+                sw = software[rel.target_id]
+                if rel.source_id in groups:
+                    groups[rel.source_id].software_list.append(sw)
+                    sw.group_list.append(groups[rel.source_id])
+                elif rel.source_id in campaigns:
+                    campaigns[rel.source_id].software_list.append(sw)
+                    sw.campaign_list.append(campaigns[rel.source_id])
+
+    def get_relationships(
+        self,
+        *,
+        source_id: str | None = None,
+        target_id: str | None = None,
+        type: str | None = None,  # noqa: A002
+    ) -> list[AttackRelationship]:
+        """
+        relationshipを起点ID・対象ID・種別で絞り込んで返す。
+
+        Args:
+            source_id (str | None): 起点のATT&CK ID (例: "G0007")
+            target_id (str | None): 対象のATT&CK ID (例: "T1059.001")
+            type (str | None): 関係種別 (例: "uses", "mitigates", "subtechnique-of", "attributed-to")
+
+        Returns:
+            list[AttackRelationship]: 条件に一致するrelationship
+        """
+        return [
+            rel
+            for rel in self.relationships
+            if (source_id is None or rel.source_id == source_id)
+            and (target_id is None or rel.target_id == target_id)
+            and (type is None or rel.type == type)
+        ]
 
     def __initialize_vector(self) -> None:
         try:
@@ -408,21 +463,6 @@ class Attack:
     def __get_procedure_chroma_collection(self) -> Collection:  # chromaDBを起動する関数
         collection: Collection = self.chroma_client.get_collection(name="attack_procedure", embedding_function=self._embedding_function)  # ty:ignore[invalid-argument-type]
         return collection
-
-    def __add_technique_to_tactic(
-        self,
-        tactic_name: str,
-        technique: AttackTechnique,
-    ) -> None:
-        """
-        タクティックにテクニックを追加する
-        """
-        tactic = self.get_tactic_by_name(tactic_name)
-        if tactic is not None:
-            tactic.technique_list.append(technique)
-        else:
-            err_msg = f"tactic_name: {tactic_name} は存在しません"
-            raise ValueError(err_msg)
 
     def __create_reference_list(self, desc: str) -> list[AttackExternalReference | AttackInternalReference]:
         """

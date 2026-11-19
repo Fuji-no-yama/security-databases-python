@@ -11,6 +11,8 @@ class AttackAbstractMitigation:  # 1つの抽象緩和策を表すクラス(具�
         domain: str,
         concrete_mitigation_list: list["AttackConcreteMitigation"],
         reference_list: list[AttackExternalReference | AttackInternalReference],
+        *,
+        stix_id: str | None = None,
     ) -> None:
         self.name: str = name
         self.id: str = mitigation_id
@@ -18,6 +20,7 @@ class AttackAbstractMitigation:  # 1つの抽象緩和策を表すクラス(具�
         self.description: str = description  # リンク系統を清掃する
         self.concrete_mitigation_list: list[AttackConcreteMitigation] = concrete_mitigation_list
         self.reference_list: list[AttackExternalReference | AttackInternalReference] = reference_list
+        self.stix_id: str | None = stix_id
 
     def get_description_include_references(self) -> str:
         """参考資料を含む説明文を取得する"""
@@ -44,6 +47,8 @@ class AttackConcreteMitigation:  # 1つの具体緩和策を表すクラス
         description: str,
         domain: str,
         reference_list: list[AttackExternalReference | AttackInternalReference],
+        *,
+        stix_id: str | None = None,
     ) -> None:
         self.abstract_mitigation_id: str = abstract_mitigation_id
         self.abstract_mitigation_name: str = abstract_mitigation_name
@@ -51,6 +56,7 @@ class AttackConcreteMitigation:  # 1つの具体緩和策を表すクラス
         self.domain: str = domain
         self.description: str = description  # リンク系統を清掃する
         self.reference_list: list[AttackExternalReference | AttackInternalReference] = reference_list
+        self.stix_id: str | None = stix_id  # 元になったmitigates relationshipのSTIX ID
 
     def get_description_include_references(self) -> str:
         """参考資料を含む説明文を取得する"""

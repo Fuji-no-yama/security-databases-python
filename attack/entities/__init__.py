@@ -3,6 +3,7 @@ from .group import AttackGroup
 from .mitigation import AttackAbstractMitigation, AttackConcreteMitigation
 from .procedure import AttackProcedure
 from .reference import AttackExternalReference, AttackInternalReference
+from .relationship import AttackRelationship
 from .software import AttackSoftware
 from .tactic import AttackTactic
 from .technique import AttackTechnique
@@ -18,4 +19,5 @@ __all__: list[str] = [
     "AttackProcedure",
     "AttackGroup",
     "AttackSoftware",
+    "AttackRelationship",
 ]

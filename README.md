@@ -98,8 +98,8 @@ DBはデータバージョンに加え、provider・モデルまたはAzure depl
 atlas/releases/<release>/chroma/openai-<model>-<hash>/
 atlas/releases/<release>/chroma/azure_openai-<deployment>-<hash>/
 
-attack/releases/<version>/<domain>/chroma/openai-<model>-<hash>/
-attack/releases/<version>/<domain>/chroma/azure_openai-<deployment>-<hash>/
+attack/releases/<version>/<domain>/chroma-stix/openai-<model>-<hash>/
+attack/releases/<version>/<domain>/chroma-stix/azure_openai-<deployment>-<hash>/
 ```
 
 この分離により、異なるモデルやproviderで作成したベクトルを誤って検索に使うことを防ぎます。旧バージョンが作成した `chroma` 直下のDBは再利用されず、認証情報設定後の初回オブジェクト初期化時に新しい保存先へ再構築されます。
@@ -284,10 +284,12 @@ Observed in case studies (4):
 
 ATT&CKではデータ構造に合わせて `enterprise`、`mobile`、`ics` のいずれかのdomainを指定します。`version`を省略すると、[`attack/data/manifest.yaml`](attack/data/manifest.yaml) に記載された最新バージョンを使用します。
 
+データにはMITRE公式のSTIX 2.1データ ([mitre-attack/attack-stix-data](https://github.com/mitre-attack/attack-stix-data)) をgzip圧縮して同梱しています。利用可能なバージョンは17.1・18.0・18.1・19.0・19.1・19.2・20.0・20.1です。廃止(revoked)・非推奨(deprecated)のオブジェクトは読み込みません。
+
 ```python
 from attack import Attack
 
-attack = Attack(version="19.1", domain="enterprise")
+attack = Attack(version="20.1", domain="enterprise")
 # attack = Attack(domain="mobile")
 # attack = Attack(domain="ics")
 
@@ -305,6 +307,7 @@ attack.campaign_list
 attack.group_list
 attack.software_list
 attack.external_reference_list
+attack.relationships
 ```
 
 ### エンティティの取得
@@ -333,6 +336,38 @@ ATT&CKのdescription中の引用は番号へ整形されています。参考資
 print(group.get_description_include_references())
 ```
 
+STIXから取得できる次の情報も利用できます。
+
+```python
+technique = attack.get_technique_by_id("T1548.002")
+print(technique.name)                    # Bypass User Account Control
+print(technique.full_name)               # Abuse Elevation Control Mechanism: Bypass User Account Control
+print(technique.parent.id, technique.platforms, technique.url)
+print([t.id for t in attack.get_technique_by_id("T1548").subtechnique_list])
+
+group = attack.get_group_by_id("G0007")
+print(group.aliases)                     # 別名
+print([s.name for s in group.software_list])   # 使用するソフトウェア
+print([c.id for c in group.campaign_list])     # 帰属するキャンペーン
+
+software = attack.get_software_by_id("S0001")
+print(software.software_type, [g.id for g in software.group_list])
+
+campaign = attack.get_campaign_by_id("C0001")
+print(campaign.first_seen, campaign.last_seen, [g.id for g in campaign.group_list])
+```
+
+### Relationships
+
+STIXのrelationshipは `get_relationships()` で起点、対象、種別を絞り込めます。主な種別は `uses`、`mitigates`、`subtechnique-of`、`attributed-to`、`detects`、`targets` (ICS) です。IDはATT&CK ID (例: `G0007`、`T1059.001`) です。
+
+```python
+for relationship in attack.get_relationships(source_id="G0007", type="uses"):
+    print(relationship.target_id, relationship.target_type)
+```
+
+プロシージャ (`AttackProcedure`) はGroup・Software・Campaignからテクニックへの `uses` relationshipから、具体的な緩和策 (`AttackConcreteMitigation`) は `mitigates` relationshipから作成しています。
+
 ### セマンティック検索
 
 先にOpenAIまたはAzure OpenAIの環境変数を設定します。
@@ -341,7 +376,7 @@ print(group.get_description_include_references())
 from attack import Attack
 
 attack = Attack(
-    version="19.1",
+    version="20.1",
     domain="enterprise",
     emb_model="text-embedding-3-small",
     embedding_provider="openai",  # または "azure_openai"
@@ -386,6 +421,12 @@ techniques = atlas.search_relevant_techniques("...", top_k=5)
 techniques = [r.item for r in atlas.search_relevant_techniques("...", top_k=5)]
 ```
 
+ATT&CKのデータはExcel版から公式STIX版に移行しました。内容はExcel版と一致することを全件比較で確認していますが、次の点が変わっています。
+
+- エンタープライズのサブテクニックの `name` は、STIXの値どおりサブテクニック単体の名前になりました (例: `"Abuse Elevation Control Mechanism: Bypass User Account Control"` → `"Bypass User Account Control"`)。親テクニック名を含む名前は `full_name` で取得できます。
+- プロシージャID (`P0001` など) の採番順が変わりました。そのため、ATT&CKのベクトルDBは新しい保存先 (`chroma-stix`) に作り直されます。
+- 依存パッケージから `pandas` と `openpyxl` を削除しました。
+
 ## 開発
 
 ```bash
@@ -399,6 +440,16 @@ Embedding APIを利用するintegration testは、必要な環境変数を設定
 
 ```bash
 uv run pytest -m integration -v
+```
+
+単体テストは、APIキーが設定されていても有料のEmbedding APIを呼ばないようになっています。
+
+### ATT&CKデータの更新
+
+新しいATT&CKバージョンが公開されたら、次のスクリプトで公式STIXデータを取得します。`attack/data/v<version>/` にgzip圧縮したファイルが保存され、`manifest.yaml` の `latest` が最新バージョンに更新されます。
+
+```bash
+uv run python scripts/update_attack_data.py 20.1
 ```
 
 ### ブランチとリリース
