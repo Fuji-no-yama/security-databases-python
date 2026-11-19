@@ -1,0 +1,58 @@
+name: Check upstream data
+
+# 上流 (MITRE ATLAS / MITRE ATT&CK) の新しいリリースを週1回確認し、
+# 同梱データより新しい版があればIssueを作成する。
+on:
+  schedule:
+    - cron: "0 0 * * 1"   # 毎週月曜 00:00 UTC (日本時間 9:00)
+  workflow_dispatch:       # Actions画面から手動でも実行できる
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: Compare upstream releases with bundled data
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check ATLAS and ATT&CK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # $1: データ名, $2: 上流リポジトリ, $3: 同梱している最新版 (先頭の "v" なし)
+          check() {
+            name="$1"; repo="$2"; bundled="$3"
+            upstream=$(gh api "repos/$repo/releases/latest" --jq .tag_name)
+            echo "$name: bundled v$bundled / upstream $upstream"
+            if [ "$upstream" = "v$bundled" ]; then
+              return
+            fi
+            title="Upstream update: $name $upstream"
+            # 同じタイトルのIssueがあれば (閉じたものも含めて) 作成しない
+            if [ -n "$(gh issue list --state all --search "in:title \"$title\"" --json number --jq '.[].number')" ]; then
+              echo "  Issue already exists: $title"
+              return
+            fi
+            gh issue create --title "$title" --body "$(cat <<EOF
+          $name の新しいリリース **$upstream** が公開されました (同梱データの最新版: v$bundled)。
+
+          - リリースノート: https://github.com/$repo/releases/tag/$upstream
+          - データ形式のバージョンが変わっている場合は、データの差し替えに加えてコードの対応が必要です。
+
+          このIssueは .github/workflows/check-upstream.yml により自動作成されました。
+          EOF
+            )"
+          }
+
+          atlas_bundled=$(sed -nE "s/^- release: '?([^']+)'?$/\1/p" atlas/data/manifest.yaml | head -n 1)
+          attack_bundled=$(sed -nE "s/^latest: '?([^']+)'?$/\1/p" attack/data/manifest.yaml)
+          if [ -z "$atlas_bundled" ] || [ -z "$attack_bundled" ]; then
+            echo "::error::Could not read the bundled versions from manifest.yaml."
+            exit 1
+          fi
+
+          check "MITRE ATLAS" "mitre-atlas/atlas-data" "$atlas_bundled"
+          check "MITRE ATT&CK" "mitre-attack/attack-stix-data" "$attack_bundled"
