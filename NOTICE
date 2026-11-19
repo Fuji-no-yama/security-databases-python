@@ -20,6 +20,9 @@ Source terms:
 https://attack.mitre.org/resources/terms-of-use/
 https://attack.mitre.org/resources/legal-and-branding/
 
+Source repository (STIX 2.1 data):
+https://github.com/mitre-attack/attack-stix-data
+
 Bundled MITRE ATLAS data
 ------------------------
 This package includes MITRE ATLAS data files.

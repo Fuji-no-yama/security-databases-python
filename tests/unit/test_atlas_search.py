@@ -1,23 +1,20 @@
 import json
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 import atlas.atlas as atlas_module
 from _security_databases.embedding import EmbeddingConfiguration
-from _security_databases.settings import settings as environment_settings
 from atlas import Atlas
 from atlas.search import NON_EXACT_SCORE_CAP, LexicalIndex, compute_scores
+from tests.conftest import build_without_embedding_api
 from tests.fake_embedding import FakeEmbeddingFunction
 
 
 @pytest.fixture(scope="module")
-def keyword_atlas() -> Iterator[Atlas]:
+def keyword_atlas() -> Atlas:
     """Embedding未設定(キーワード検索のみ)のAtlas。"""
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(environment_settings, "openai_api_key", "")
-        yield Atlas(version="2026.10")
+    return build_without_embedding_api(lambda: Atlas(version="2026.10"))
 
 
 def _patch_fake_embedding(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FakeEmbeddingFunction:
