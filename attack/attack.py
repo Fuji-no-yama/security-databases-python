@@ -1,15 +1,11 @@
+import logging
 import re
-import shutil
-from contextlib import suppress
+import sys
 from importlib.resources import files
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
-import chromadb
-from chromadb.api.models.Collection import Collection
-from chromadb.errors import NotFoundError
 from platformdirs import user_data_dir
-from tqdm import tqdm
 
 from _security_databases.embedding import (
     EmbeddingModel,
@@ -17,6 +13,9 @@ from _security_databases.embedding import (
     create_embedding_function,
     resolve_embedding_configuration,
 )
+from _security_databases.render import Renderable
+from _security_databases.search import LexicalIndex, SearchResult, compute_scores
+from _security_databases.vector_index import IndexSpec, VectorIndex
 from attack import version_resolver
 from attack.entities import (
     AttackAbstractMitigation,
@@ -31,10 +30,31 @@ from attack.entities import (
     AttackTactic,
     AttackTechnique,
 )
+from attack.entities._text import description_text
 from attack.stix_bundle import StixBundle, attack_id_of, attack_url_of
 
 if TYPE_CHECKING:
     from importlib.abc import Traversable
+
+T = TypeVar("T", bound=Renderable)
+
+logger = logging.getLogger("attack")
+_verbose_handler: logging.Handler | None = None
+
+# ベクトル化する文章の作り方やコレクション構成を変えたら上げる。既存のベクトルDBは次回起動時に自動で再構築される。
+_INDEX_VERSION = "1"
+# クエリからATT&CK IDを抽出する正規表現 (例: "T1059.001", "TA0001", "G0007", "S0001", "C0001", "M1049")
+_ATTACK_ID_PATTERN = re.compile(r"\b(?:T\d{4}(?:\.\d{3})?|TA\d{4}|[GSCM]\d{4})\b", re.IGNORECASE)
+
+SearchKind = Literal["technique", "mitigation", "procedure", "group", "software", "campaign"]
+_COLLECTION_NAMES: dict[SearchKind, str] = {
+    "technique": "attack_technique",
+    "mitigation": "attack_mitigation",
+    "procedure": "attack_procedure",
+    "group": "attack_group",
+    "software": "attack_software",
+    "campaign": "attack_campaign",
+}
 
 # ドメインごとのkill chain名 (テクニックとタクティックの対応付けに使う)
 _KILL_CHAIN_NAMES: dict[str, str] = {
@@ -54,6 +74,17 @@ _PROCEDURE_PARENT_TYPES: dict[str, str] = {
 }
 
 
+
+def _enable_verbose_logging() -> None:
+    """ロガー "attack" の INFO 以上を標準エラー出力に表示する。"""
+    global _verbose_handler  # noqa: PLW0603
+    if _verbose_handler is None:
+        _verbose_handler = logging.StreamHandler(sys.stderr)
+        _verbose_handler.setFormatter(logging.Formatter("[attack] %(message)s"))
+        logger.addHandler(_verbose_handler)
+    logger.setLevel(logging.INFO)
+
+
 class Attack:
     version: str
     domain: str
@@ -61,7 +92,7 @@ class Attack:
     tactic_list: list[AttackTactic]
     mitigation_list: list[AttackAbstractMitigation]
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,  # 以下をキーワード引数に
         domain: str = "enterprise",
@@ -69,6 +100,7 @@ class Attack:
         emb_model: EmbeddingModel = "text-embedding-3-large",
         embedding_provider: EmbeddingProvider = "openai",
         initialize_vector: bool = False,
+        verbose: bool = False,
     ) -> None:
         """
         Args:
@@ -76,8 +108,13 @@ class Attack:
             version (str | None): ATTACKデータバージョン。Noneの場合はmanifest.yamlのlatest
             emb_model (str): OpenAI providerでベクトル化に使用するモデル。Azure OpenAIではdeployment設定を使用する
             embedding_provider (str): "openai"または"azure_openai"
-            initialize_vector (bool): ベクトルDBを初期化するかどうか(デフォルトはFalse。TrueにするとベクトルDBを再構築する)
+            initialize_vector (bool): TrueならベクトルDBを強制的に再構築する。
+                通常はデータやライブラリの更新を検知して自動で再構築されるため指定不要
+            verbose (bool): TrueならベクトルDB構築などの進捗を標準エラー出力に表示する。
+                Falseの場合は何も出力しない(ロガー名 "attack" で制御可能)
         """  # noqa: E501
+        if verbose:
+            _enable_verbose_logging()
         available_domains: list[str] = version_resolver.list_domains()
         if domain not in available_domains:
             err_msg = f"domain must be one of {available_domains}."
@@ -90,7 +127,6 @@ class Attack:
         self.version = f"v{resolved_version}"
         self.data_file: Traversable = files("attack.data").joinpath(data_path).joinpath(f"{domain}-attack-{resolved_version}.json.gz")
         self.user_data_dir_path: Path = Path(user_data_dir("attack")) / "releases" / resolved_version / domain
-        self.user_data_dir_path.mkdir(parents=True, exist_ok=True)  # 念の為作成
 
         self._bundle = StixBundle(self.data_file)
         self.external_reference_list: list[AttackExternalReference] = self.__setup_external_reference_list()
@@ -103,22 +139,29 @@ class Attack:
         self.relationships: list[AttackRelationship] = self.__setup_relationships()
         self.__link_entities()
 
-        self.technique_chroma_collection: Collection | None = None
-        self.procedure_chroma_collection: Collection | None = None
+        self.__build_search_documents()
 
+        self._vector_index: VectorIndex | None = None
         embedding_configuration = resolve_embedding_configuration(embedding_provider, emb_model)
         if embedding_configuration is not None:
-            self._embedding_function = create_embedding_function(embedding_configuration)
-            self.chroma_path = self.user_data_dir_path / _VECTOR_DB_DIR / embedding_configuration.cache_key
-            has_vector_db = self.chroma_path.is_dir()
-            if not has_vector_db:
-                print("ベクトルDBの設定がありません。初期化し作成します...")
-                initialize_vector = True
-            self.chroma_client = chromadb.PersistentClient(str(self.chroma_path))
-            if initialize_vector:
-                self.__initialize_vector()
-            self.technique_chroma_collection = self.__get_technique_chroma_collection()
-            self.procedure_chroma_collection = self.__get_procedure_chroma_collection()
+            self.chroma_path: Path = self.user_data_dir_path / _VECTOR_DB_DIR / embedding_configuration.cache_key
+            self.chroma_path.mkdir(parents=True, exist_ok=True)
+            self._vector_index = VectorIndex(
+                self.chroma_path,
+                create_embedding_function(embedding_configuration),
+                data_hash=self._bundle.data_hash,
+                index_version=_INDEX_VERSION,
+                logger_name="attack",
+                show_progress=verbose,
+            )
+            self._vector_index.ensure(self.__index_specs(), force_rebuild=initialize_vector)
+        else:
+            logger.info("Embedding providerの設定がないため、キーワード検索のみで動作します。")
+
+    @property
+    def vector_search_enabled(self) -> bool:
+        """ベクトル検索が有効かどうか。Falseの場合、search_relevant系はキーワード検索のみで動作する。"""
+        return self._vector_index is not None
 
     def __setup_external_reference_list(self) -> list[AttackExternalReference]:
         return [
@@ -168,6 +211,7 @@ class Attack:
                 tactics=tactics,
                 reference_list=self.__create_reference_list(description),
                 stix_id=obj["id"],
+                raw_description=description,
                 platforms=obj.get("x_mitre_platforms"),
                 url=attack_url_of(obj),
             )
@@ -199,6 +243,7 @@ class Attack:
                         domain=self.domain,
                         reference_list=self.__create_reference_list(rel_description),
                         stix_id=rel["id"],
+                        raw_description=rel_description,
                     ),
                 )
             mitigation_list.append(
@@ -210,6 +255,7 @@ class Attack:
                     concrete_mitigation_list=concrete_mitigation_list,
                     reference_list=self.__create_reference_list(description),
                     stix_id=obj["id"],
+                    raw_description=description,
                 ),
             )
         return mitigation_list
@@ -243,6 +289,7 @@ class Attack:
                     domain=self.domain,
                     reference_list=self.__create_reference_list(rel_description),
                     stix_id=rel["id"],
+                    raw_description=rel_description,
                 ),
             )
         return procedure_list
@@ -257,6 +304,7 @@ class Attack:
                 procedure_list=self.__create_procedure_list(obj),
                 reference_list=self.__create_reference_list(obj.get("description", "")),
                 stix_id=obj["id"],
+                raw_description=obj.get("description", ""),
                 aliases=[a for a in obj.get("aliases", []) if a != obj["name"]],
                 url=attack_url_of(obj),
                 first_seen=obj.get("first_seen"),
@@ -275,6 +323,7 @@ class Attack:
                 procedure_list=self.__create_procedure_list(obj),
                 reference_list=self.__create_reference_list(obj.get("description", "")),
                 stix_id=obj["id"],
+                raw_description=obj.get("description", ""),
                 aliases=[a for a in obj.get("x_mitre_aliases", []) if a != obj["name"]],
                 url=attack_url_of(obj),
                 software_type=obj["type"],
@@ -293,6 +342,7 @@ class Attack:
                 procedure_list=self.__create_procedure_list(obj),
                 reference_list=self.__create_reference_list(obj.get("description", "")),
                 stix_id=obj["id"],
+                raw_description=obj.get("description", ""),
                 aliases=[a for a in obj.get("aliases", []) if a != obj["name"]],
                 url=attack_url_of(obj),
             )
@@ -327,12 +377,16 @@ class Attack:
         techniques = {t.id: t for t in self.technique_list}
         for mitigation in self.mitigation_list:
             for concrete in mitigation.concrete_mitigation_list:
-                if concrete.technique_id in techniques:
-                    techniques[concrete.technique_id].mitigation_list.append(concrete)
+                concrete.mitigation = mitigation
+                concrete.technique = techniques.get(concrete.technique_id)
+                if concrete.technique is not None:
+                    concrete.technique.mitigation_list.append(concrete)
         for parent in [*self.campaign_list, *self.group_list, *self.software_list]:
             for procedure in parent.procedure_list:
-                if procedure.technique_id in techniques:
-                    techniques[procedure.technique_id].procedure_list.append(procedure)
+                procedure.parent = parent
+                procedure.technique = techniques.get(procedure.technique_id)
+                if procedure.technique is not None:
+                    procedure.technique.procedure_list.append(procedure)
         self.__link_relationship_references(techniques)
 
     def __link_relationship_references(self, techniques: dict[str, AttackTechnique]) -> None:
@@ -382,87 +436,6 @@ class Attack:
             and (target_id is None or rel.target_id == target_id)
             and (type is None or rel.type == type)
         ]
-
-    def __initialize_vector(self) -> None:
-        try:
-            self.__initialize_technique_vector()
-            self.__initialize_procedure_vector()
-            print("ベクトルDBの初期化が完了しました。")  # 初期化完了のメッセージ
-        except Exception:
-            shutil.rmtree(self.chroma_path)
-            raise
-
-    def __initialize_technique_vector(self) -> None:
-        # ベクトルdb(chroma)とavroファイルの両方を初期化する関数
-        # ベクトルavroファイルの初期化
-        id_list: list[str] = []
-        desc_list: list[str] = []
-        metadata_list: list[dict[str, bool]] = []  # {"is_parent":bool}の形を保持した辞書
-        for tec in self.technique_list:
-            id_list.append(tec.id)
-            desc_list.append(tec.description)
-            metadata_list.append({"is_parent": not tec.have_parent})
-        # ベクトルDB(chroma)の初期化
-        with suppress(NotFoundError):
-            self.chroma_client.delete_collection(name="attack_technique")  # 存在する場合は一度削除してリセット
-        collection: Collection = self.chroma_client.get_or_create_collection(
-            name="attack_technique",
-            metadata={"hnsw:space": "cosine"},
-            embedding_function=self._embedding_function,  # ty:ignore[invalid-argument-type]
-        )
-        print("テクニックベクトルDB初期化中...")
-        for i in tqdm(range(0, len(id_list), 200)):  # rate limitを避けるため200件ずつ追加
-            end_idx = min(i + 200, len(id_list))
-            collection.add(
-                documents=desc_list[i:end_idx],
-                ids=id_list[i:end_idx],
-                metadatas=metadata_list[i:end_idx],  # ty:ignore[invalid-argument-type]
-            )
-
-    def __initialize_procedure_vector(self) -> None:
-        # procedureについてベクトルDB(chroma)とavroファイルの両方を初期化する関数
-        id_list: list[str] = []
-        desc_list: list[str] = []
-        metadata_list: list[dict[str, str]] = []  # {"parent": "campaign"}等の形を保持した辞書
-        for campaign in self.campaign_list:
-            for proc in campaign.procedure_list:
-                id_list.append(proc.original_id)
-                desc_list.append(proc.description)
-                metadata_list.append({"parent": "campaign"})
-        for group in self.group_list:
-            for proc in group.procedure_list:
-                id_list.append(proc.original_id)
-                desc_list.append(proc.description)
-                metadata_list.append({"parent": "group"})
-        for software in self.software_list:
-            for proc in software.procedure_list:
-                id_list.append(proc.original_id)
-                desc_list.append(proc.description)
-                metadata_list.append({"parent": "software"})
-        # ベクトルDB(chroma)の初期化
-        with suppress(NotFoundError):
-            self.chroma_client.delete_collection(name="attack_procedure")  # 存在する場合は一度削除してリセット
-        collection: Collection = self.chroma_client.get_or_create_collection(
-            name="attack_procedure",
-            metadata={"hnsw:space": "cosine"},
-            embedding_function=self._embedding_function,  # ty:ignore[invalid-argument-type]
-        )
-        print("プロシージャベクトルDB初期化中...")
-        for i in tqdm(range(0, len(id_list), 200)):  # rate limitを避けるため200件ずつ追加
-            end_idx = min(i + 200, len(id_list))
-            collection.add(
-                documents=desc_list[i:end_idx],
-                ids=id_list[i:end_idx],
-                metadatas=metadata_list[i:end_idx],  # ty:ignore[invalid-argument-type]
-            )
-
-    def __get_technique_chroma_collection(self) -> Collection:  # chromaDBを起動する関数
-        collection: Collection = self.chroma_client.get_collection(name="attack_technique", embedding_function=self._embedding_function)  # ty:ignore[invalid-argument-type]
-        return collection
-
-    def __get_procedure_chroma_collection(self) -> Collection:  # chromaDBを起動する関数
-        collection: Collection = self.chroma_client.get_collection(name="attack_procedure", embedding_function=self._embedding_function)  # ty:ignore[invalid-argument-type]
-        return collection
 
     def __create_reference_list(self, desc: str) -> list[AttackExternalReference | AttackInternalReference]:
         """
@@ -740,35 +713,40 @@ class Attack:
         err_msg = f"procedure_id: {procedure_id} は存在しません"
         raise ValueError(err_msg)
 
-    def search_relevant_techniques(
+    def search_relevant_techniques(  # noqa: PLR0913
         self,
         query: str,
         top_k: int,
         *,
         filter: Literal["parent", "child", "both"] = "both",  # noqa: A002
-    ) -> list[AttackTechnique]:
+        tactic_id: str | None = None,
+        platform: str | None = None,
+    ) -> list[SearchResult[AttackTechnique]]:
         """
-        クエリを元にベクトルDBを検索する関数
+        クエリに関連するテクニックを検索する。
+
+        ベクトル検索(親テクニック名を含む名前+説明文のcos類似度)で順位を付け、IDまたは名前の完全一致は
+        最上位(スコア1.0)にする。Embedding未設定時はベクトル検索の代わりにキーワード検索(BM25)を使う。
+        データが英語のため英語のクエリを推奨する。
 
         Args:
-            query (str): 検索文言
-            top_k (int): 上位何件を取得するか
-            filter (str): 親のみ, 子のみ, 両方 の3種類でフィルターをかける
+            query (str): 検索文言 (自然文、名前、ID "T1059.001" など)
+            top_k (int): 上位取得件数
+            filter (str): "parent"(親テクニックのみ) / "child"(サブテクニックのみ) / "both"
+            tactic_id (str | None): 指定したタクティックに属するテクニックに絞り込む (例: "TA0002")
+            platform (str | None): 指定したプラットフォームを持つテクニックに絞り込む (例: "Windows")
 
         Returns:
-            list[AttackTechnique]: top_kで指定された個数分上位の結果をテクニックオブジェクト
+            list[SearchResult[AttackTechnique]]: スコア降順の検索結果
         """
-        if self.technique_chroma_collection is None:
-            err_msg = "選択したEmbedding providerの設定がないため、ベクトルDB検索は無効化されています。"
-            raise ValueError(err_msg)
-        if filter == "parent":
-            result = self.technique_chroma_collection.query(query_texts=[query], n_results=top_k, where={"is_parent": True})
-        elif filter == "child":
-            result = self.technique_chroma_collection.query(query_texts=[query], n_results=top_k, where={"is_parent": False})
-        elif filter == "both":
-            result = self.technique_chroma_collection.query(query_texts=[query], n_results=top_k)
-        ret: list[AttackTechnique] = [self.get_technique_by_id(technique_id=tec_id) for tec_id in result["ids"][0]]
-        return ret
+        candidates = {
+            tec.id: tec
+            for tec in self.technique_list
+            if (filter == "both" or (filter == "parent") != tec.have_parent)
+            and (tactic_id is None or any(t.id == tactic_id for t in tec.tactics))
+            and (platform is None or platform in tec.platforms)
+        }
+        return self.__search("technique", query, top_k, candidates)
 
     def search_relevant_procedures(
         self,
@@ -776,23 +754,147 @@ class Attack:
         top_k: int,
         *,
         filter: Literal["campaign", "group", "software", "all"] = "all",  # noqa: A002
-    ) -> list[AttackProcedure]:
+        technique_id: str | None = None,
+    ) -> list[SearchResult[AttackProcedure]]:
         """
-        クエリを元にベクトルDBを検索する関数
+        クエリに関連するプロシージャ(Group・Software・Campaignによるテクニックの具体的な使用例)を検索する。
 
         Args:
             query (str): 検索文言
-            top_k (int): 上位何件を取得するか
-            filter (str): campaign, group, software, all のどれorすべてから取得するか
+            top_k (int): 上位取得件数
+            filter (str): "campaign" / "group" / "software" / "all" で起点の種類を絞り込む
+            technique_id (str | None): 指定したテクニックのプロシージャに絞り込む (例: "T1059.001")
+
         Returns:
-            list[AttackProcedure]: top_kで指定された個数分上位の結果をプロシージャオブジェクト
+            list[SearchResult[AttackProcedure]]: スコア降順の検索結果
         """
-        if self.procedure_chroma_collection is None:
-            err_msg = "選択したEmbedding providerの設定がないため、ベクトルDB検索は無効化されています。"
+        candidates = {
+            key: proc
+            for key, proc in self._search_items["procedure"].items()
+            if filter in ("all", proc.parent_type) and (technique_id is None or proc.technique_id == technique_id)
+        }
+        return self.__search("procedure", query, top_k, candidates)
+
+    def search_relevant_mitigations(self, query: str, top_k: int) -> list[SearchResult[AttackAbstractMitigation]]:
+        """
+        クエリに関連する緩和策を検索する。
+
+        Args:
+            query (str): 検索文言
+            top_k (int): 上位取得件数
+
+        Returns:
+            list[SearchResult[AttackAbstractMitigation]]: スコア降順の検索結果
+        """
+        return self.__search("mitigation", query, top_k, self._search_items["mitigation"])
+
+    def search_relevant_groups(self, query: str, top_k: int) -> list[SearchResult[AttackGroup]]:
+        """
+        クエリに関連するグループを検索する。名前・別名・説明文を検索対象とする。
+
+        Args:
+            query (str): 検索文言
+            top_k (int): 上位取得件数
+
+        Returns:
+            list[SearchResult[AttackGroup]]: スコア降順の検索結果
+        """
+        return self.__search("group", query, top_k, self._search_items["group"])
+
+    def search_relevant_software(
+        self,
+        query: str,
+        top_k: int,
+        *,
+        software_type: Literal["malware", "tool"] | None = None,
+    ) -> list[SearchResult[AttackSoftware]]:
+        """
+        クエリに関連するソフトウェアを検索する。名前・別名・説明文を検索対象とする。
+
+        Args:
+            query (str): 検索文言
+            top_k (int): 上位取得件数
+            software_type (str | None): "malware" または "tool" で絞り込む
+
+        Returns:
+            list[SearchResult[AttackSoftware]]: スコア降順の検索結果
+        """
+        candidates = {k: sw for k, sw in self._search_items["software"].items() if software_type is None or sw.software_type == software_type}
+        return self.__search("software", query, top_k, candidates)
+
+    def search_relevant_campaigns(self, query: str, top_k: int) -> list[SearchResult[AttackCampaign]]:
+        """
+        クエリに関連するキャンペーンを検索する。名前・別名・説明文を検索対象とする。
+
+        Args:
+            query (str): 検索文言
+            top_k (int): 上位取得件数
+
+        Returns:
+            list[SearchResult[AttackCampaign]]: スコア降順の検索結果
+        """
+        return self.__search("campaign", query, top_k, self._search_items["campaign"])
+
+    def __build_search_documents(self) -> None:
+        """検索対象ごとのテキストとキーワードインデックスを作る。プロシージャのキーはSTIX ID。"""
+        procedures = [p for x in [*self.campaign_list, *self.group_list, *self.software_list] for p in x.procedure_list]
+        self._search_items: dict[SearchKind, dict[str, Any]] = {
+            "technique": {t.id: t for t in self.technique_list},
+            "mitigation": {m.id: m for m in self.mitigation_list},
+            "procedure": {p.stix_id or p.original_id: p for p in procedures},
+            "group": {g.id: g for g in self.group_list},
+            "software": {s.id: s for s in self.software_list},
+            "campaign": {c.id: c for c in self.campaign_list},
+        }
+
+        def named(obj: AttackGroup | AttackSoftware | AttackCampaign) -> str:
+            alias_text = f"\nAliases: {', '.join(obj.aliases)}" if obj.aliases else ""
+            return f"{obj.name}{alias_text}\n\n{self.__plain(obj)}"
+
+        self._search_documents: dict[SearchKind, dict[str, str]] = {
+            "technique": {t.id: f"{t.full_name}\n\n{self.__plain(t)}" for t in self.technique_list},
+            "mitigation": {m.id: f"{m.name}\n\n{self.__plain(m)}" for m in self.mitigation_list},
+            "procedure": {
+                key: self.__procedure_document(p) for key, p in self._search_items["procedure"].items()
+            },
+            "group": {g.id: named(g) for g in self.group_list},
+            "software": {s.id: named(s) for s in self.software_list},
+            "campaign": {c.id: named(c) for c in self.campaign_list},
+        }
+        self._search_names: dict[SearchKind, dict[str, str]] = {
+            kind: {key: obj.name for key, obj in items.items()} if kind != "procedure" else {} for kind, items in self._search_items.items()
+        }
+        self._lexical_indexes: dict[SearchKind, LexicalIndex] = {kind: LexicalIndex(docs) for kind, docs in self._search_documents.items()}
+
+    def __procedure_document(self, procedure: AttackProcedure) -> str:
+        technique = procedure.technique.full_name if procedure.technique else procedure.technique_id
+        return f"{procedure.parent_name} ({procedure.parent_type}) uses {technique}\n\n{self.__plain(procedure)}"
+
+    @staticmethod
+    def __plain(obj: Any) -> str:  # noqa: ANN401
+        """ベクトル化・キーワード検索用の説明文 (ATT&CK内部リンクは表示名に置き換え、引用は除去)。"""
+        return description_text(obj.raw_description, obj.description)
+
+    def __index_specs(self) -> list[IndexSpec]:
+        return [
+            IndexSpec(name=_COLLECTION_NAMES[kind], ids=list(docs.keys()), documents=list(docs.values()))
+            for kind, docs in self._search_documents.items()
+        ]
+
+    def __search(self, kind: SearchKind, query: str, top_k: int, candidates: dict[str, T]) -> list[SearchResult[T]]:
+        if top_k <= 0:
+            err_msg = f"top_kは1以上を指定してください: {top_k}"
             raise ValueError(err_msg)
-        result = self.procedure_chroma_collection.query(query_texts=[query], n_results=top_k, where={"parent": filter} if filter != "all" else None)
-        ret: list[AttackProcedure] = [self.get_procedure_by_id(procedure_id=proc_id) for proc_id in result["ids"][0]]
-        return ret
+        semantic = self._vector_index.similarities(_COLLECTION_NAMES[kind], query) if self._vector_index is not None else None
+        scores = compute_scores(
+            query,
+            lexical=self._lexical_indexes[kind],
+            names=self._search_names[kind],
+            semantic=semantic,
+            id_pattern=_ATTACK_ID_PATTERN,
+        )
+        ranked = sorted((key for key in scores if key in candidates), key=lambda key: (-scores[key], key))
+        return [SearchResult(candidates[key], scores[key]) for key in ranked[:top_k]]
 
     def get_available_versions(self) -> list[str]:
         """

@@ -41,9 +41,14 @@ def test_attack_vector_search() -> None:
     if not attack_settings.openai_api_key:
         pytest.skip("OPENAI_API_KEY is not configured")
 
-    attack = Attack(version="19.1", domain="enterprise", emb_model="text-embedding-3-small")
-    assert attack.search_relevant_techniques("PowerShell execution", top_k=1)
+    attack = Attack(version="20.1", domain="enterprise", emb_model="text-embedding-3-small")
+    assert attack.vector_search_enabled
+    assert attack.search_relevant_techniques("PowerShell execution", top_k=1)[0].score > 0
     assert attack.search_relevant_procedures("malicious attachment", top_k=1)
+    assert attack.search_relevant_mitigations("restrict administrator privileges", top_k=1)
+    assert attack.search_relevant_groups("Russian state-sponsored espionage group", top_k=1)
+    assert attack.search_relevant_software("remote access trojan", top_k=1)
+    assert attack.search_relevant_campaigns("supply chain compromise of IT management software", top_k=1)
 
 
 def test_atlas_vector_search_with_azure_openai() -> None:
@@ -76,6 +81,28 @@ def test_attack_vector_search_with_azure_openai() -> None:
     ):
         pytest.skip("Azure OpenAI is not configured")
 
-    attack = Attack(version="19.1", domain="enterprise", embedding_provider="azure_openai")
-    assert attack.search_relevant_techniques("PowerShell execution", top_k=1)
+    attack = Attack(version="20.1", domain="enterprise", embedding_provider="azure_openai")
+    assert attack.vector_search_enabled
+    assert attack.search_relevant_techniques("PowerShell execution", top_k=1)[0].score > 0
     assert attack.search_relevant_procedures("malicious attachment", top_k=1)
+
+
+@pytest.mark.parametrize(
+    ("query", "kind", "expected_id"),
+    [
+        ("obtaining credentials from LSASS process memory", "technique", "T1003.001"),
+        ("Russian military intelligence GRU unit", "group", "G0007"),
+        ("compromise of SolarWinds Orion software updates", "campaign", "C0024"),
+    ],
+)
+def test_attack_vector_search_ranking(query: str, kind: str, expected_id: str) -> None:
+    if not attack_settings.openai_api_key:
+        pytest.skip("OPENAI_API_KEY is not configured")
+
+    attack = Attack(version="20.1", domain="enterprise", emb_model="text-embedding-3-small")
+    search = {
+        "technique": attack.search_relevant_techniques,
+        "group": attack.search_relevant_groups,
+        "campaign": attack.search_relevant_campaigns,
+    }[kind]
+    assert search(query, top_k=1)[0].item.id == expected_id

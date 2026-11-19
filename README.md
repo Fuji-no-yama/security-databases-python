@@ -57,7 +57,7 @@ attack = Attack(
 )
 ```
 
-`embedding_provider`は省略できるため、従来の `Atlas()` と `Attack()` も `OPENAI_API_KEY` が設定されていればOpenAIを使用します。APIキーがない場合も通常のデータ取得は利用できます。検索は、ATLASではキーワード検索のみで動作し、ATT&CKでは無効になります。
+`embedding_provider`は省略できるため、従来の `Atlas()` と `Attack()` も `OPENAI_API_KEY` が設定されていればOpenAIを使用します。APIキーがない場合も通常のデータ取得は利用できます。検索はキーワード検索のみで動作します。
 
 ### Azure OpenAI
 
@@ -89,8 +89,9 @@ Azure OpenAIでは `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` がAPI呼び出し時の�
 
 初回実行時はChroma DBを自動作成します。
 
-- **ATLAS**: 各コレクションに作成時のインデックス形式とデータのハッシュを記録し、ライブラリの更新でベクトル化の方法やデータが変わった場合は、次回の初期化時に該当するコレクションだけを自動で再構築します。通常は何も出力しません。進捗を表示したい場合は `verbose=True` を指定します(出力先は標準エラー出力)。強制的に再構築する場合は `initialize_vector=True` を指定します。
-- **ATT&CK**: 初回作成時に進捗を表示します。再作成する場合は `initialize_vector=True` を指定します。
+ATLAS・ATT&CKとも、各コレクションに作成時のインデックス形式とデータのハッシュを記録し、ライブラリの更新でベクトル化の方法やデータが変わった場合は、次回の初期化時に該当するコレクションだけを自動で再構築します。通常は何も出力しません。進捗を表示したい場合は `verbose=True` を指定します(出力先は標準エラー出力)。強制的に再構築する場合は `initialize_vector=True` を指定します。
+
+ATT&CK enterpriseはプロシージャが約1万7千件あるため、初回のベクトルDB作成には1〜2分程度かかります。
 
 DBはデータバージョンに加え、provider・モデルまたはAzure deployment・endpointごとに分離されます。ディレクトリ名末尾には設定を識別するハッシュが付きます。
 
@@ -134,7 +135,7 @@ atlas.software_list    # 2026.10以降
 atlas.relationships
 ```
 
-ATLASは標準では標準出力・標準エラー出力に何も表示しません。ベクトルDB構築などの進捗を確認したい場合は `Atlas(verbose=True)` を指定します。表示は標準エラー出力に行われるため、標準入出力で通信するMCPサーバーなどに組み込んでも通信を妨げません。ログはロガー名 `atlas` で個別に制御することもできます。
+ATLAS・ATT&CKは標準では標準出力・標準エラー出力に何も表示しません。ベクトルDB構築などの進捗を確認したい場合は `Atlas(verbose=True)` / `Attack(verbose=True)` を指定します。表示は標準エラー出力に行われるため、標準入出力で通信するMCPサーバーなどに組み込んでも通信を妨げません。ログはロガー名 `atlas` / `attack` で個別に制御することもできます。
 
 ### IDによる取得
 
@@ -237,7 +238,7 @@ for result in techniques:
 
 #### 検索精度に関する注意
 
-- **英語のクエリを推奨します。** ATLASのデータは英語のため、日本語のクエリでは類似度が全体に低くなり、順位も不安定になります。例えば `text-embedding-3-small` で同じ内容を検索した場合、正解のテクニック (AML.T0102) のスコアは英語で約0.69、日本語で約0.46でした。日本語の「ロシアの国家支援グループによる攻撃」では正解のケーススタディが3位でしたが、英語の "attack by Russian state-sponsored group" では1位でした。AIエージェントのツールとして使う場合は、ツールの説明で英語での検索を指示すると効果的です。
+- **英語のクエリを推奨します。** ATLAS・ATT&CKのデータは英語のため、日本語のクエリでは類似度が全体に低くなり、順位も不安定になります。例えば `text-embedding-3-small` で同じ内容を検索した場合、正解のテクニック (AML.T0102) のスコアは英語で約0.69、日本語で約0.46でした。日本語の「ロシアの国家支援グループによる攻撃」では正解のケーススタディが3位でしたが、英語の "attack by Russian state-sponsored group" では1位でした。AIエージェントのツールとして使う場合は、ツールの説明で英語での検索を指示すると効果的です。
 - **キーワード検索のみの場合は精度が限られます。** 語形の違い(例: `LLM` と `LLMs`)を区別し、同義語も考慮しないため、自然文のクエリでは関連する項目を取りこぼすことがあります。可能な限りEmbedding providerを設定してください。
 - **ベクトル検索とキーワード検索は混ぜていません。** 両方のスコアを合算する方式も試しましたが、ベクトル検索の類似度は候補間の差が小さく(0.01〜0.02程度)、"llm" などの一般的な語のキーワード一致で正しい順位が入れ替わることを確認したため採用していません。
 
@@ -368,9 +369,9 @@ for relationship in attack.get_relationships(source_id="G0007", type="uses"):
 
 プロシージャ (`AttackProcedure`) はGroup・Software・Campaignからテクニックへの `uses` relationshipから、具体的な緩和策 (`AttackConcreteMitigation`) は `mitigates` relationshipから作成しています。
 
-### セマンティック検索
+### 検索
 
-先にOpenAIまたはAzure OpenAIの環境変数を設定します。
+ATLASと同じ方式で、テクニック・プロシージャ・緩和策・グループ・ソフトウェア・キャンペーンを検索できます。Embedding providerが設定されている場合はベクトル検索、未設定の場合はキーワード検索で順位を付け、IDや名前 (例: `"T1059.001"`、`"PowerShell"`、`"APT28"`) と完全一致する項目はスコア1.0で最上位になります。検索精度に関する注意もATLASと同じです(英語のクエリを推奨)。
 
 ```python
 from attack import Attack
@@ -383,17 +384,61 @@ attack = Attack(
 )
 
 techniques = attack.search_relevant_techniques(
-    query="PowerShellを利用したコマンド実行",
+    "obtaining credentials from LSASS process memory",
     top_k=5,
-    filter="both",  # parent / child / both
+    filter="both",            # parent / child / both
+    tactic_id=None,           # 例: "TA0006"
+    platform=None,            # 例: "Windows"
 )
-
 procedures = attack.search_relevant_procedures(
-    query="悪意のある添付ファイルを利用したフィッシング",
+    "dumped LSASS memory using comsvcs.dll",
     top_k=5,
-    filter="all",  # campaign / group / software / all
+    filter="all",             # campaign / group / software / all
+    technique_id=None,        # 例: "T1003.001"
 )
+mitigations = attack.search_relevant_mitigations("defend against phishing emails", top_k=3)
+groups = attack.search_relevant_groups("Russian military intelligence GRU unit", top_k=3)   # 名前・別名・説明文
+software = attack.search_relevant_software("open-source credential dumping tool", top_k=3, software_type="tool")
+campaigns = attack.search_relevant_campaigns("compromise of SolarWinds Orion software updates", top_k=3)
+
+for result in techniques:
+    print(result.score, result.item.id, result.item.full_name)  # result.item は AttackTechnique
 ```
+
+検索結果は `AttackSearchResult` (ATLASの `AtlasSearchResult` と同じ型) のリストです。
+
+### テキスト・辞書への変換 (AIエージェント向け)
+
+ATLASと同じく、検索結果と各オブジェクトは `to_text()` と `to_dict()` を持ちます。関連オブジェクトは1段階だけ「IDと名前」で展開し、テクニック名は親テクニック名を含む `full_name` で表示します。
+
+```python
+print(attack.search_relevant_techniques("T1548.002", top_k=1)[0].to_text(max_related=3))
+attack.get_group_by_id("G0007").to_text()
+attack.get_software_by_id("S0154").to_dict()
+```
+
+```text
+## T1548.002 Abuse Elevation Control Mechanism: Bypass User Account Control  (score: 1.00)
+Type: technique | Domain: enterprise | Platforms: Windows
+Tactics: TA0004 Privilege Escalation
+Parent technique: T1548 Abuse Elevation Control Mechanism
+
+Adversaries may bypass UAC mechanisms to elevate process privileges on a system. ...
+
+Mitigations (4):
+- M1026 Privileged Account Management
+- M1047 Audit
+- M1051 Update Software
+- ... and 1 more
+
+Procedure examples (64):
+- C0006 Operation Honeybee (campaign)
+- G0016 APT29 (group)
+- G0027 Threat Group-3390 (group)
+- ... and 61 more
+```
+
+`to_text()` はSTIXの原文 (`raw_description`) から、ATT&CKへのリンクを表示名に置き換え、引用 `(Citation: ...)` を除去した説明文を出力します。従来の `description` 属性(引用を番号に整形したもの)はそのままです。
 
 ## API命名規則と移行
 
@@ -412,7 +457,7 @@ procedures = attack.search_relevant_procedures(
 | `Attack.get_relevant_technique` | `Attack.search_relevant_techniques` |
 | `Attack.get_relevant_procedure` | `Attack.search_relevant_procedures` |
 
-ATLASの `search_relevant_techniques` と `search_relevant_case_study_steps` は、オブジェクトのリストではなく `AtlasSearchResult` のリストを返すように変更されました。従来のオブジェクトは `result.item` で取得できます。
+ATLASの `search_relevant_techniques` と `search_relevant_case_study_steps`、ATT&CKの `search_relevant_techniques` と `search_relevant_procedures` は、オブジェクトのリストではなく検索結果 (`AtlasSearchResult` / `AttackSearchResult`) のリストを返すように変更されました。従来のオブジェクトは `result.item` で取得できます。また、Embedding providerが未設定の場合もエラーにならず、キーワード検索で動作します。
 
 ```python
 # 変更前
@@ -424,7 +469,7 @@ techniques = [r.item for r in atlas.search_relevant_techniques("...", top_k=5)]
 ATT&CKのデータはExcel版から公式STIX版に移行しました。内容はExcel版と一致することを全件比較で確認していますが、次の点が変わっています。
 
 - エンタープライズのサブテクニックの `name` は、STIXの値どおりサブテクニック単体の名前になりました (例: `"Abuse Elevation Control Mechanism: Bypass User Account Control"` → `"Bypass User Account Control"`)。親テクニック名を含む名前は `full_name` で取得できます。
-- プロシージャID (`P0001` など) の採番順が変わりました。そのため、ATT&CKのベクトルDBは新しい保存先 (`chroma-stix`) に作り直されます。
+- プロシージャID (`P0001` など) の採番順が変わりました。そのため、ATT&CKのベクトルDBは新しい保存先 (`chroma-stix`) に作り直されます。ベクトルDBではプロシージャを、バージョン内で変わらないSTIX ID (`stix_id`) で管理しています。
 - 依存パッケージから `pandas` と `openpyxl` を削除しました。
 
 ## 開発

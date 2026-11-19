@@ -1,6 +1,7 @@
 """MITRE ATT&CKの公式STIX 2.1バンドルを読み込み、検索しやすい形に索引付けするモジュール。"""
 
 import gzip
+import hashlib
 import json
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any
@@ -45,7 +46,10 @@ class StixBundle:
 
     def __init__(self, path: "Traversable") -> None:
         with path.open("rb") as f:
-            raw: dict[str, Any] = json.loads(gzip.decompress(f.read()))
+            compressed: bytes = f.read()
+        # ベクトルDBの再構築判定に使うデータファイルのハッシュ
+        self.data_hash: str = hashlib.sha256(compressed).hexdigest()[:16]
+        raw: dict[str, Any] = json.loads(gzip.decompress(compressed))
         objects: list[dict[str, Any]] = raw.get("objects", [])
 
         self.objects_by_id: dict[str, dict[str, Any]] = {}
