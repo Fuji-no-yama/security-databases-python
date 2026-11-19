@@ -147,9 +147,41 @@ print(case_study_step.description)
 
 IDが存在しない場合、各取得メソッドは `ValueError` を送出します。
 
+### エンティティとソフトウェア (2026.10以降)
+
+format-version 6.1.0 (リリース2026.10) から、活動主体を表すエンティティ (`AML.E####`) と、ツール・マルウェアを表すソフトウェア (`AML.S####`) が追加されました。
+
+```python
+atlas = Atlas(version="2026.10")
+
+case_study = atlas.get_case_study_by_id("AML.CS0044")
+for attribution in case_study.attributions:          # 帰属先と活動目的
+    print(attribution.entity.name, attribution.activity_purpose)  # APT28 Adversarial Operation
+print([e.name for e in case_study.reported_by])        # 報告者エンティティ
+print([s.name for s in case_study.software_list])      # 使用されたソフトウェア
+print(case_study.start_date, case_study.start_date_granularity, case_study.end_date)
+
+entity = atlas.get_entity_by_id("AML.E0018")
+print(entity.entity_type, entity.attack_reference.id)  # Activity Cluster G0007
+print([s.name for s in entity.software_list])          # LAMEHUG
+
+software = atlas.get_software_by_id("AML.S0015")
+print(software.aliases)                                # ['PROMPTSTEAL']
+print([t.id for t in software.technique_list])         # 実装するテクニック
+
+technique = atlas.get_technique_by_id("AML.T0102")
+print([s.name for s in technique.software_list])       # このテクニックを実装するソフトウェア
+```
+
+ライブラリはデータに存在する値のみを返し、リリース間の差異を推測で補完しません。
+
+- 2026.09以前のリリースでは `entity_list`・`software_list`・`attributions`・`reported_by`・`software_list` などは空です。
+- 6.1.0でケーススタディの `actor` は任意項目になり、多くのケーススタディで帰属先は `attributions` に移りました。データに無い場合 `actor` は空文字列です。
+- ケーススタディの日付は6.1.0で `date` から `start-date` / `end-date` に名称変更されたため、旧リリースの `date` は `start_date` として読み込みます。旧リリースの `end_date` は常に `None` です。
+
 ### Relationships
 
-v6データのrelationshipは `get_relationships()` で起点、対象、種別を絞り込めます。種別は `achieves`、`specializes`、`mitigates`、`employs`、`sequences` です。
+v6データのrelationshipは `get_relationships()` で起点、対象、種別を絞り込めます。種別は `achieves`、`specializes`、`mitigates`、`employs`、`sequences` と、6.1.0で追加された `attributed-to`、`reported-by`、`uses`、`implements` です。`attributed-to` などでは `activity_purpose` に活動目的が入ります。
 
 ```python
 relationships = atlas.get_relationships(

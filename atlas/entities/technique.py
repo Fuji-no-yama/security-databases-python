@@ -1,9 +1,11 @@
 import re
 from typing import TYPE_CHECKING
 
+from .attack_reference import AtlasAttackReference
 from .reference import AtlasReference
 
 if TYPE_CHECKING:
+    from .software import AtlasSoftware
     from .tactic import AtlasTactic
 
 
@@ -23,6 +25,11 @@ class AtlasTechnique:
         platforms (list[str] | None): v6で追加されたプラットフォーム一覧
             (例: ["Predictive AI", "Generative AI", "Agentic AI", "Enterprise"])
         maturity (str | None): v6の成熟度 (例: "Demonstrated", "Feasible")
+        attack_reference (AtlasAttackReference | None): 対応するATT&CK Techniqueへの参照
+
+    Attributes:
+        software_list (list[AtlasSoftware]): このテクニックを実装するソフトウェア (implements の逆引き)。
+            6.1.0より前のリリースでは常に空
     """
 
     def __init__(  # noqa: PLR0913
@@ -38,6 +45,7 @@ class AtlasTechnique:
         references: list[AtlasReference] | None = None,
         platforms: list[str] | None = None,
         maturity: str | None = None,
+        attack_reference: AtlasAttackReference | None = None,
     ) -> None:
         self.name: str = name
         self.id: str = technique_id
@@ -49,6 +57,8 @@ class AtlasTechnique:
         self.references: list[AtlasReference] | None = references
         self.platforms: list[str] | None = platforms
         self.maturity: str | None = maturity
+        self.attack_reference: AtlasAttackReference | None = attack_reference
+        self.software_list: list[AtlasSoftware] = []
 
     def clean_description(self, desc: str) -> str:
         """

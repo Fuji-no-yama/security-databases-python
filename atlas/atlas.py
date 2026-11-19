@@ -4,7 +4,7 @@ import shutil
 from contextlib import suppress
 from importlib.resources import files
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, get_args
 
 import chromadb
 import yaml
@@ -21,11 +21,16 @@ from _security_databases.embedding import (
 )
 from atlas import version_resolver
 from atlas.entities import (
+    AtlasAssociatedEntity,
+    AtlasAttackReference,
     AtlasCaseStudy,
+    AtlasCaseStudyAttribution,
     AtlasCaseStudyStep,
+    AtlasEntity,
     AtlasMitigation,
     AtlasReference,
     AtlasRelationship,
+    AtlasSoftware,
     AtlasTactic,
     AtlasTechnique,
     RelationshipType,
@@ -37,6 +42,13 @@ if TYPE_CHECKING:
     from chromadb.api.client import ClientAPI
 
 T = TypeVar("T")
+
+# format-version 6.1.0 でケーススタディの項目名が変更されたもの (旧名 -> 新名)。
+# 値の推測ではなく上流CHANGELOGに記載された同義の名称変更のみを読み替える。
+_RENAMED_CASE_STUDY_KEYS: dict[str, str] = {
+    "date": "start-date",
+    "date-granularity": "start-date-granularity",
+}
 
 
 class Atlas:
@@ -74,6 +86,8 @@ class Atlas:
         self.__create_tactic_list()
         self.__create_tec_list()
         self.__create_mit_list()
+        self.__create_entity_list()
+        self.__create_software_list()
         self.__create_casestudy_list()
         self.__build_relationships()
         self.__apply_relationships()
@@ -108,6 +122,12 @@ class Atlas:
             refs.append(AtlasReference(title=str(title), url=str(url), ref_id=r.get("id")))
         return refs or None
 
+    @staticmethod
+    def _make_attack_reference(raw: dict[str, Any] | None) -> AtlasAttackReference | None:
+        if not raw or raw.get("id") is None or raw.get("url") is None:
+            return None
+        return AtlasAttackReference(attack_id=str(raw["id"]), url=str(raw["url"]))
+
     def __create_tactic_list(self) -> None:
         self.tactic_list: list[AtlasTactic] = []
         self._tactics_by_id: dict[str, AtlasTactic] = {}
@@ -138,6 +158,7 @@ class Atlas:
                 references=self._make_references(td.get("references")),
                 platforms=td.get("platforms"),
                 maturity=td.get("maturity"),
+                attack_reference=self._make_attack_reference(td.get("attack-reference")),
             )
             self.technique_list.append(tec)
             self._techniques_by_id[tid] = tec
@@ -157,10 +178,53 @@ class Atlas:
             self.mitigation_list.append(mit)
             self._mitigations_by_id[mid] = mit
 
+    def __create_entity_list(self) -> None:
+        self.entity_list: list[AtlasEntity] = []
+        self._entities_by_id: dict[str, AtlasEntity] = {}
+        for eid, ed in (self._raw.get("entities") or {}).items():
+            ent = AtlasEntity(
+                entity_id=eid,
+                name=ed["name"],
+                description=ed.get("description", ""),
+                entity_type=ed["entity-type"],
+                associated_entities=[
+                    AtlasAssociatedEntity(name=str(a["name"]), description=a.get("description"))
+                    for a in ed.get("associated-entities") or []
+                ],
+                attack_reference=self._make_attack_reference(ed.get("attack-reference")),
+                uuid=ed.get("uuid"),
+                references=self._make_references(ed.get("references")),
+                created_date=ed.get("created-date"),
+                modified_date=ed.get("modified-date"),
+            )
+            self.entity_list.append(ent)
+            self._entities_by_id[eid] = ent
+
+    def __create_software_list(self) -> None:
+        self.software_list: list[AtlasSoftware] = []
+        self._software_by_id: dict[str, AtlasSoftware] = {}
+        for sid, sd in (self._raw.get("software") or {}).items():
+            sw = AtlasSoftware(
+                software_id=sid,
+                name=sd["name"],
+                description=sd.get("description", ""),
+                software_type=sd["software-type"],
+                software_categories=sd.get("software-categories"),
+                aliases=sd.get("aliases"),
+                attack_reference=self._make_attack_reference(sd.get("attack-reference")),
+                uuid=sd.get("uuid"),
+                references=self._make_references(sd.get("references")),
+                created_date=sd.get("created-date"),
+                modified_date=sd.get("modified-date"),
+            )
+            self.software_list.append(sw)
+            self._software_by_id[sid] = sw
+
     def __create_casestudy_list(self) -> None:
         self.casestudy_list: list[AtlasCaseStudy] = []
         self._casestudies_by_id: dict[str, AtlasCaseStudy] = {}
-        for cid, cd in self._raw.get("case-studies", {}).items():
+        for cid, raw_cd in self._raw.get("case-studies", {}).items():
+            cd: dict[str, Any] = {_RENAMED_CASE_STUDY_KEYS.get(k, k): v for k, v in raw_cd.items()}
             refs = self._make_references(cd.get("references"))
             cs_type = cd.get("type", "Exercise")
             cs = AtlasCaseStudy(
@@ -175,6 +239,11 @@ class Atlas:
                 reference_url_list=[r.url for r in refs] if refs else None,
                 uuid=cd.get("uuid"),
                 references=refs,
+                reporter=cd.get("reporter"),
+                start_date=cd.get("start-date"),
+                start_date_granularity=cd.get("start-date-granularity"),
+                end_date=cd.get("end-date"),
+                end_date_granularity=cd.get("end-date-granularity"),
             )
             self.casestudy_list.append(cs)
             self._casestudies_by_id[cid] = cs
@@ -183,7 +252,7 @@ class Atlas:
         """v6の relationships セクションを AtlasRelationship のフラットリストに正規化する。"""
         self.relationships: list[AtlasRelationship] = []
         raw_relationships: dict[str, dict[str, list[dict[str, Any]]]] = self._raw.get("relationships", {})
-        known_types: set[str] = {"achieves", "specializes", "mitigates", "employs", "sequences"}
+        known_types: set[str] = set(get_args(RelationshipType))
         for groups in raw_relationships.values():
             for rel_type, entries in groups.items():
                 if rel_type not in known_types:
@@ -195,6 +264,7 @@ class Atlas:
                             target_id=str(rel["target"]),
                             type=cast("RelationshipType", rel_type),
                             description=rel.get("description"),
+                            activity_purpose=rel.get("activity-purpose"),
                             tactic_id=rel.get("tactic"),
                             step_id=rel.get("step-id"),
                             leads_to=rel.get("leads-to"),
@@ -242,6 +312,8 @@ class Atlas:
                         leads_to=rel.leads_to,
                     ),
                 )
+            else:
+                self.__apply_entity_software_relationship(rel)
 
         for rel in self.relationships:
             if rel.type != "specializes":
@@ -268,6 +340,54 @@ class Atlas:
 
         for cs in self.casestudy_list:
             cs.procedure.sort(key=lambda s: (s.step_id or ""))
+
+    def __apply_entity_software_relationship(self, rel: AtlasRelationship) -> None:
+        """format-version 6.1.0で追加された relationship を Entity / Software の派生ビューに反映する。"""
+        if rel.type in ("attributed-to", "reported-by"):
+            self.__apply_casestudy_entity_relationship(rel)
+        elif rel.type == "uses":
+            self.__apply_uses_relationship(rel)
+        elif rel.type == "implements":
+            self.__apply_implements_relationship(rel)
+
+    def __apply_casestudy_entity_relationship(self, rel: AtlasRelationship) -> None:
+        """attributed-to / reported-by (CaseStudy → Entity) を反映する。"""
+        cs = self._casestudies_by_id.get(rel.source_id)
+        ent = self._entities_by_id.get(rel.target_id)
+        if cs is None or ent is None:
+            return
+        if rel.type == "attributed-to":
+            cs.attributions.append(
+                AtlasCaseStudyAttribution(entity=ent, activity_purpose=rel.activity_purpose, description=rel.description),
+            )
+            if cs not in ent.casestudy_list:
+                ent.casestudy_list.append(cs)
+        elif ent not in cs.reported_by:
+            cs.reported_by.append(ent)
+
+    def __apply_uses_relationship(self, rel: AtlasRelationship) -> None:
+        """uses (CaseStudy → Software / Entity → Software / Entity → Technique) を反映する。"""
+        sw = self._software_by_id.get(rel.target_id)
+        tec = self._techniques_by_id.get(rel.target_id)
+        source_cs = self._casestudies_by_id.get(rel.source_id)
+        source_ent = self._entities_by_id.get(rel.source_id)
+        if source_cs is not None and sw is not None and sw not in source_cs.software_list:
+            source_cs.software_list.append(sw)
+        elif source_ent is not None and sw is not None and sw not in source_ent.software_list:
+            source_ent.software_list.append(sw)
+        elif source_ent is not None and tec is not None and tec not in source_ent.technique_list:
+            source_ent.technique_list.append(tec)
+
+    def __apply_implements_relationship(self, rel: AtlasRelationship) -> None:
+        """implements (Software → Technique) を反映し、Technique 側にも逆引きを設定する。"""
+        sw = self._software_by_id.get(rel.source_id)
+        tec = self._techniques_by_id.get(rel.target_id)
+        if sw is None or tec is None:
+            return
+        if tec not in sw.technique_list:
+            sw.technique_list.append(tec)
+        if sw not in tec.software_list:
+            tec.software_list.append(sw)
 
     def get_relationships(
         self,
@@ -448,6 +568,38 @@ class Atlas:
                     return step
         err_msg = f"'{cs_step_id}'が検索の結果見つかりませんでした。"
         raise ValueError(err_msg)
+
+    def get_entity_by_id(self, entity_id: str) -> AtlasEntity:
+        """
+        IDからエンティティを検索する。format-version 6.1.0より前のリリースにはエンティティが存在しない。
+
+        Args:
+            entity_id (str): エンティティのID (例: "AML.E0018")
+
+        Returns:
+            AtlasEntity: 検索されたエンティティオブジェクト
+        """
+        ent = self._entities_by_id.get(entity_id)
+        if ent is None:
+            err_msg = f"'{entity_id}'が検索の結果見つかりませんでした。"
+            raise ValueError(err_msg)
+        return ent
+
+    def get_software_by_id(self, software_id: str) -> AtlasSoftware:
+        """
+        IDからソフトウェアを検索する。format-version 6.1.0より前のリリースにはソフトウェアが存在しない。
+
+        Args:
+            software_id (str): ソフトウェアのID (例: "AML.S0015")
+
+        Returns:
+            AtlasSoftware: 検索されたソフトウェアオブジェクト
+        """
+        sw = self._software_by_id.get(software_id)
+        if sw is None:
+            err_msg = f"'{software_id}'が検索の結果見つかりませんでした。"
+            raise ValueError(err_msg)
+        return sw
 
     def search_relevant_techniques(
         self,
