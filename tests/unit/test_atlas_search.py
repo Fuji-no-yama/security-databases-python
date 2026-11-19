@@ -8,6 +8,7 @@ import atlas.atlas as atlas_module
 from _security_databases.embedding import EmbeddingConfiguration
 from _security_databases.settings import settings as environment_settings
 from atlas import Atlas
+from atlas.search import NON_EXACT_SCORE_CAP, LexicalIndex, compute_scores
 from tests.fake_embedding import FakeEmbeddingFunction
 
 
@@ -174,3 +175,21 @@ def test_verbose_logs_to_stderr_only(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "[atlas]" in captured.err
+
+
+def test_vector_scores_are_not_mixed_with_keyword_scores() -> None:
+    lexical = LexicalIndex({"a": "generate commands", "b": "llm llm llm system information"})
+    names = {"a": "Generate Malicious Commands", "b": "Discover LLM System Information"}
+
+    scores = compute_scores("llm commands", lexical=lexical, names=names, semantic={"a": 0.50, "b": 0.49})
+
+    assert scores["a"] > scores["b"]
+    assert scores["a"] == pytest.approx(0.50 * NON_EXACT_SCORE_CAP)
+
+
+def test_exact_match_overrides_vector_score() -> None:
+    lexical = LexicalIndex({"a": "x", "b": "y"})
+
+    scores = compute_scores("AML.T0001", lexical=lexical, names={"AML.T0001": "x"}, semantic={"AML.T0001": 0.1, "b": 0.9})
+
+    assert scores["AML.T0001"] == 1.0

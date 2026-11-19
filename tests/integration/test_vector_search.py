@@ -20,6 +20,23 @@ def test_atlas_vector_search() -> None:
     assert atlas.search_relevant_case_study_steps("RAG attack", top_k=1)
 
 
+
+@pytest.mark.parametrize(
+    ("query", "kind", "expected_id"),
+    [
+        # キーワードスコアを混ぜていた頃に順位が下がっていた事例。ベクトル検索のみなら1位になる
+        ("malware that uses an LLM to generate commands", "technique", "AML.T0102"),
+        ("attack by Russian state-sponsored group", "case_study", "AML.CS0044"),
+    ],
+)
+def test_atlas_vector_search_ranking(query: str, kind: str, expected_id: str) -> None:
+    if not atlas_settings.openai_api_key:
+        pytest.skip("OPENAI_API_KEY is not configured")
+
+    atlas = Atlas(version="2026.10", emb_model="text-embedding-3-small")
+    search = atlas.search_relevant_techniques if kind == "technique" else atlas.search_relevant_case_studies
+    assert search(query, top_k=1)[0].item.id == expected_id
+
 def test_attack_vector_search() -> None:
     if not attack_settings.openai_api_key:
         pytest.skip("OPENAI_API_KEY is not configured")

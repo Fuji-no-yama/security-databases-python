@@ -202,7 +202,7 @@ for relationship in relationships:
 
 ### 検索
 
-テクニック・緩和策・ケーススタディ・ケーススタディのステップを検索できます。検索はベクトル検索(名前と説明文のcos類似度)とキーワード検索(BM25)を組み合わせて行い、結果はスコアの高い順に返します。
+テクニック・緩和策・ケーススタディ・ケーススタディのステップを検索できます。Embedding providerが設定されている場合はベクトル検索(名前と説明文のcos類似度)、未設定の場合はキーワード検索(BM25)で順位を付け、結果はスコアの高い順に返します。
 
 ```python
 from atlas import Atlas
@@ -214,16 +214,16 @@ atlas = Atlas(
 )
 
 techniques = atlas.search_relevant_techniques(
-    query="LLMでコマンドを生成するマルウェア",
+    query="malware that uses an LLM to generate commands",
     top_k=5,
     filter="both",            # parent / child / both
     tactic_id=None,           # 例: "AML.TA0002"
     platform=None,            # 例: "Agentic AI"
     maturity=None,            # "Feasible" / "Demonstrated" / "Realized"
 )
-mitigations = atlas.search_relevant_mitigations("プロンプトインジェクション対策", top_k=5)
-case_studies = atlas.search_relevant_case_studies("APT28", top_k=3, casestudy_type="Incident")
-steps = atlas.search_relevant_case_study_steps("RAGを利用したシステムへの攻撃", top_k=3)
+mitigations = atlas.search_relevant_mitigations("prompt injection defenses", top_k=5)
+case_studies = atlas.search_relevant_case_studies("attack by Russian state-sponsored group", top_k=3, casestudy_type="Incident")
+steps = atlas.search_relevant_case_study_steps("uploading a malicious model to a public model hub", top_k=3)
 
 for result in techniques:
     print(result.score, result.item.id, result.item.name)  # result.item は AtlasTechnique
@@ -233,7 +233,13 @@ for result in techniques:
 
 - IDや名前と完全一致する場合(例: `"AML.T0051"`、`"LLM Prompt Injection"`)は、その項目がスコア1.0で最上位になります。それ以外のスコアは1.0未満です。
 - ケーススタディは、名前・対象・帰属先エンティティ・使用ソフトウェア・概要が検索対象です。
-- Embedding providerが未設定の場合はキーワード検索のみで動作します(`atlas.vector_search_enabled` が `False`)。ATLASのデータは英語のため、キーワード検索のみの場合は英語のクエリを推奨します。
+- Embedding providerが未設定の場合はキーワード検索のみで動作します(`atlas.vector_search_enabled` が `False`)。
+
+#### 検索精度に関する注意
+
+- **英語のクエリを推奨します。** ATLASのデータは英語のため、日本語のクエリでは類似度が全体に低くなり、順位も不安定になります。例えば `text-embedding-3-small` で同じ内容を検索した場合、正解のテクニック (AML.T0102) のスコアは英語で約0.69、日本語で約0.46でした。日本語の「ロシアの国家支援グループによる攻撃」では正解のケーススタディが3位でしたが、英語の "attack by Russian state-sponsored group" では1位でした。AIエージェントのツールとして使う場合は、ツールの説明で英語での検索を指示すると効果的です。
+- **キーワード検索のみの場合は精度が限られます。** 語形の違い(例: `LLM` と `LLMs`)を区別し、同義語も考慮しないため、自然文のクエリでは関連する項目を取りこぼすことがあります。可能な限りEmbedding providerを設定してください。
+- **ベクトル検索とキーワード検索は混ぜていません。** 両方のスコアを合算する方式も試しましたが、ベクトル検索の類似度は候補間の差が小さく(0.01〜0.02程度)、"llm" などの一般的な語のキーワード一致で正しい順位が入れ替わることを確認したため採用していません。
 
 ### テキスト・辞書への変換 (AIエージェント向け)
 

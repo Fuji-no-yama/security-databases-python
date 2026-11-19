@@ -33,7 +33,7 @@ from atlas.entities import (
     RelationshipType,
 )
 from atlas.entities._render import AtlasRenderable
-from atlas.search import AtlasSearchResult, LexicalIndex, hybrid_scores
+from atlas.search import AtlasSearchResult, LexicalIndex, compute_scores
 from atlas.vector_index import AtlasVectorIndex, IndexSpec
 
 if TYPE_CHECKING:
@@ -492,7 +492,7 @@ class Atlas:
             err_msg = f"top_kは1以上を指定してください: {top_k}"
             raise ValueError(err_msg)
         semantic = self._vector_index.similarities(_COLLECTION_NAMES[kind], query) if self._vector_index is not None else None
-        scores = hybrid_scores(query, lexical=self._lexical_indexes[kind], names=self._search_names[kind], semantic=semantic)
+        scores = compute_scores(query, lexical=self._lexical_indexes[kind], names=self._search_names[kind], semantic=semantic)
         ranked = sorted((doc_id for doc_id in scores if doc_id in candidates), key=lambda doc_id: (-scores[doc_id], doc_id))
         return [AtlasSearchResult(candidates[doc_id], scores[doc_id]) for doc_id in ranked[:top_k]]
 
@@ -630,8 +630,9 @@ class Atlas:
         """
         クエリに関連するテクニックを検索する。
 
-        ベクトル検索(名前+説明文のcos類似度)とキーワード検索(BM25)を組み合わせ、
-        IDまたは名前の完全一致は最上位(スコア1.0)にする。Embedding未設定時はキーワード検索のみ。
+        ベクトル検索(名前+説明文のcos類似度)で順位を付け、IDまたは名前の完全一致は最上位(スコア1.0)にする。
+        Embedding未設定時はベクトル検索の代わりにキーワード検索(BM25)を使う。
+        データが英語のため英語のクエリを推奨する。
 
         Args:
             query (str): 検索文言 (自然文、名前、ID "AML.T0051" など)

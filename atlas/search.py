@@ -1,4 +1,4 @@
-"""ATLASのハイブリッド検索(キーワード + ベクトル)と検索結果の表現。"""
+"""ATLASの検索スコア計算(ベクトル / キーワード + 完全一致)と検索結果の表現。"""
 
 import math
 import re
@@ -15,9 +15,6 @@ T = TypeVar("T", bound=AtlasRenderable)
 _TOKEN = re.compile(r"[a-z0-9]+|[^\x00-\x7f\s]+")
 _ATLAS_ID = re.compile(r"\bAML\.[A-Z]+\d+(?:\.\d+)?(?:\.S\d+)?\b", re.IGNORECASE)
 
-# ベクトル検索が有効な場合の重み。キーワード一致は補助的に加点する。
-SEMANTIC_WEIGHT = 0.75
-LEXICAL_WEIGHT = 0.25
 # スコア1.0はIDまたは名前の完全一致専用とし、それ以外のスコアはこの値を上限にする。
 NON_EXACT_SCORE_CAP = 0.95
 
@@ -138,7 +135,7 @@ def exact_match_ids(query: str, names: dict[str, str]) -> set[str]:
     return matched
 
 
-def hybrid_scores(
+def compute_scores(
     query: str,
     *,
     lexical: LexicalIndex,
@@ -146,31 +143,28 @@ def hybrid_scores(
     semantic: dict[str, float] | None,
 ) -> dict[str, float]:
     """
-    キーワード・ベクトル・完全一致を統合した0〜1のスコアを返す。
+    検索スコア(0〜1)を計算する。
 
     - IDまたは名前の完全一致: 1.0
-    - ベクトル検索あり: SEMANTIC_WEIGHT * cos類似度 + LEXICAL_WEIGHT * キーワードスコア
-    - ベクトル検索なし: キーワードスコアのみ
+    - ベクトル検索あり: cos類似度のみ
+    - ベクトル検索なし: キーワードスコア(BM25)のみ
     完全一致以外は NON_EXACT_SCORE_CAP を掛けて1.0未満に収める。
+
+    ベクトル検索とキーワードスコアは混ぜない。cos類似度は候補間の差が小さい(0.01〜0.02程度)一方、
+    キーワードスコアは0〜1で大きく変動するため、混ぜると "llm" などの一般的な語の一致で
+    ベクトル検索の正しい順位が入れ替わることを実データで確認したため。
 
     Args:
         query (str): 検索文言
-        lexical (LexicalIndex): キーワード検索インデックス
+        lexical (LexicalIndex): キーワード検索インデックス (ベクトル検索が無効な場合に使用)
         names (dict[str, str]): ID -> 名前 (完全一致判定用)
         semantic (dict[str, float] | None): ID -> cos類似度。ベクトル検索が無効ならNone
 
     Returns:
         dict[str, float]: ID -> スコア。スコアが0のIDは含まない
     """
-    lexical_scores = lexical.scores(query)
-    if semantic is None:
-        combined = dict(lexical_scores)
-    else:
-        combined = {
-            doc_id: SEMANTIC_WEIGHT * max(semantic.get(doc_id, 0.0), 0.0) + LEXICAL_WEIGHT * lexical_scores.get(doc_id, 0.0)
-            for doc_id in set(semantic) | set(lexical_scores)
-        }
-    scores = {doc_id: NON_EXACT_SCORE_CAP * min(s, 1.0) for doc_id, s in combined.items()}
+    base = lexical.scores(query) if semantic is None else {doc_id: max(s, 0.0) for doc_id, s in semantic.items()}
+    scores = {doc_id: NON_EXACT_SCORE_CAP * min(s, 1.0) for doc_id, s in base.items()}
     for doc_id in exact_match_ids(query, names):
         scores[doc_id] = 1.0
     return {doc_id: s for doc_id, s in scores.items() if s > 0}
