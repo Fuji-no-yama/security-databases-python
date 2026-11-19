@@ -1,11 +1,20 @@
 """ATLAS / ATT&CKのオブジェクトをAIエージェント向けのテキスト・辞書に変換する共通処理。"""
 
+import html
 import re
 from typing import Any, Protocol
 
 _MARKDOWN_LINK = re.compile(r"\[(.*?)\]\(.*?\)")
 # 説明文中の引用マーカー (例: "[[group-profile]]")。参照先はreferencesに含まれるためテキストでは除去する。
 _CITATION = re.compile(r"\s*\[\[[^\]]+\]\]")
+# 書式用のHTMLタグ。データ中の "<PID>" "<filename>" のようなプレースホルダーや、攻撃例として記述された
+# "<script>" "<atlas-example>" などは内容そのものであるため対象外とし、以下の書式タグのみ変換する。
+_HTML_CODE = re.compile(r"<code>(.*?)</code>", re.IGNORECASE | re.DOTALL)
+_HTML_BREAK = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_HTML_BOLD = re.compile(r"</?b>", re.IGNORECASE)
+# 対になっていない <code> / </code>。上流データには "<sode>ssh_login</code>" のように開始タグが崩れた箇所があるため、
+# 対として変換できなかった書式タグは除去する (データ自体は変更しない)。
+_HTML_CODE_LEFTOVER = re.compile(r"</?code>", re.IGNORECASE)
 
 
 class _Named(Protocol):
@@ -52,8 +61,26 @@ class Renderable:
 
 
 def clean_text(text: str | None) -> str:
-    """テキスト出力用に、マークダウンリンクを表示テキストのみに置き換え、引用マーカーを除去する。"""
-    return _CITATION.sub("", _MARKDOWN_LINK.sub(r"\1", text or "")).strip()
+    """
+    テキスト出力用に説明文を整形する。
+
+    - マークダウンリンクを表示テキストのみに置き換える
+    - 引用マーカー (例: "[[group-profile]]") を除去する
+    - 書式用のHTMLタグを変換する (<code>...</code> → `...`、<br> → 改行、<b> と対になっていない <code> は除去)
+    - HTMLエンティティ (例: "&lt;", "&#35;") を文字に戻す
+
+    Args:
+        text (str | None): 元の説明文
+
+    Returns:
+        str: 整形後の説明文
+    """
+    result = _CITATION.sub("", _MARKDOWN_LINK.sub(r"\1", text or ""))
+    result = _HTML_CODE.sub(r"`\1`", result)
+    result = _HTML_BREAK.sub("\n", result)
+    result = _HTML_BOLD.sub("", result)
+    result = _HTML_CODE_LEFTOVER.sub("", result)
+    return html.unescape(result).strip()
 
 
 def ref(obj: _Named) -> dict[str, str]:
